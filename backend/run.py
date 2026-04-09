@@ -1,11 +1,12 @@
 from data.loader import load_candles
-from engine.backtester import run_backtest
+from indicators.market_structure import find_swing_points, detect_structure
 
 candles = load_candles("data/data.csv")
 print(f"Loaded {len(candles)} candles")
 
-trades = run_backtest(candles, starting_balance=10000.0)
-print(f"Completed {len(trades)} trades")
+swings = find_swing_points(candles)
+structure = detect_structure(swings)
+print(f"Structure points: {len(structure)}")
 
-for trade in trades[:5]:
-    print(trade)
+for s in structure[:10]:
+    print(s)
