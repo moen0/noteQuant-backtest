@@ -20,8 +20,16 @@ def load_candles(filepath: str) -> list[Candle]:
 
     return candles
 
-if __name__ == "__main__":
-    candles = load_candles("data.csv")
-    print(f"Loaded {len(candles)} candles")
-    print(f"First: {candles[0]}")
-    print(f"Last: {candles[-1]}")
+def resample_candles(candles, period=5):
+    resampled = []
+    for i in range(0, len(candles) - period + 1, period):
+        group = candles[i:i + period]
+        resampled.append(Candle(
+            time_open=group[0].time_open,
+            open=group[0].open,
+            high=max(c.high for c in group),
+            low=min(c.low for c in group),
+            close=group[-1].close,
+            volume=sum(c.volume for c in group)
+        ))
+    return resampled
