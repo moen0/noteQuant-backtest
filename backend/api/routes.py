@@ -35,7 +35,6 @@ def get_candles(timeframe: int = 5):
             for c in candles
         ]
     }
-
 @app.get("/api/indicators")
 def get_indicators(timeframe: int = 5):
     candles_1m = load_candles("data/data.csv")
@@ -47,7 +46,10 @@ def get_indicators(timeframe: int = 5):
     fvgs = find_fvgs(candles)
     obs = find_order_blocks(candles, structure)
 
+    candle_times = [c.time_open.isoformat() for c in candles]
+
     return {
+        "candle_times": candle_times,
         "swings": swings,
         "structure": structure,
         "liquidity": levels,
