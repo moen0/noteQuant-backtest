@@ -1,28 +1,44 @@
 from data.loader import load_candles, resample_candles
-from indicators.market_structure import find_swing_points, detect_structure
-from indicators.liquidity import find_liquidity_levels
-from indicators.fvg import find_fvgs
-from indicators.order_blocks import find_order_blocks
+from engine.backtester import run_backtest
+from strategies.ict_strategy import ICTStrategy
+import time
 
-candles_1m = load_candles("data/data.csv")
-candles_3m = resample_candles(candles_1m, period=3)
+# Load data
+candles_1m = load_candles("data/data1.csv")
 candles_5m = resample_candles(candles_1m, period=5)
 
-print(f"1m: {len(candles_1m)} candles")
-print(f"3m: {len(candles_3m)} candles")
-print(f"5m: {len(candles_5m)} candles")
+print("Testing different Risk-Reward ratios with optimized ICTStrategy...\n")
 
-swings = find_swing_points(candles_5m)
-structure = detect_structure(swings)
-levels = find_liquidity_levels(swings)
-fvgs = find_fvgs(candles_5m)
-obs = find_order_blocks(candles_5m, structure)
+# Best params from optimization (you can tweak session/lookback etc. if you want)
+strategy = ICTStrategy(
+    session="new_york",          # Best was New York
+    lookback=7,
+    ob_max_age=20,               # Best was 20
+    atr_mult=2.5,
+    use_liquidity_sweep=False,   # Best was False
+    sweep_lookback=5,
+)
 
-print(f"Swing points: {len(swings)}")
-print(f"Structure points: {len(structure)}")
-print(f"Liquidity levels: {len(levels)}")
-print(f"FVGs: {len(fvgs)}")
-print(f"Order blocks: {len(obs)}")
+for rr in [1.0, 1.5, 2.0, 2.5, 3.0]:
+    t0 = time.perf_counter()
 
-for o in obs[:5]:
-    print(o)
+    trades = run_backtest(candles_5m, strategy, 10000, risk_reward=rr)
+
+    elapsed = time.perf_counter() - t0
+
+    if not trades:
+        print(f"RR={rr}: No trades")
+        continue
+
+    total_pnl = sum(t.pnl for t in trades)
+    winners = [t for t in trades if t.pnl > 0]
+    losers = [t for t in trades if t.pnl <= 0]
+
+    wr = len(winners) / len(trades) * 100 if trades else 0
+    avg_win = sum(t.pnl for t in winners) / len(winners) if winners else 0
+    avg_loss = sum(t.pnl for t in losers) / len(losers) if losers else 0
+    profit_factor = abs(sum(t.pnl for t in winners) / sum(t.pnl for t in losers)) if losers else float('inf')
+
+    print(f"RR={rr:4.1f} | Trades={len(trades):4d} | WR={wr:5.1f}% | "
+          f"PnL={total_pnl:8.2f} | AvgWin={avg_win:6.3f} | AvgLoss={avg_loss:6.3f} | "
+          f"PF={profit_factor:5.2f} | Time={elapsed:.3f}s")
