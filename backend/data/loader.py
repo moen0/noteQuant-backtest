@@ -5,6 +5,7 @@ from data.model import Candle
 def load_candles(filepath: str) -> list[Candle]:
     df = pd.read_csv(filepath, sep=";", header=None, names=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], format="%Y%m%d %H%M%S")
+    df = df.sort_values("timestamp", kind="mergesort").drop_duplicates(subset=["timestamp"], keep="last")
 
     candles = []
     for _, row in df.iterrows():

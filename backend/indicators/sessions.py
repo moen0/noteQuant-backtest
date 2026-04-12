@@ -5,23 +5,42 @@ SESSIONS_EST = {
     "london": (time(2, 0), time(5, 0)),
     "new_york": (time(7, 0), time(10, 0)),
     "london_close": (time(10, 0), time(12, 0)),
+    "london_ny_overlap": (time(8, 0), time(10, 0)),
 }
 
+
 def in_session(candle_time, session_name):
+    if session_name == "all":
+        return True
+
+    if session_name not in SESSIONS_EST:
+        return True
+
     t = candle_time.time()
     start, end = SESSIONS_EST[session_name]
-    if start > end:  # crosses midnight
+    if start > end:
         return t >= start or t < end
     return start <= t < end
 
+
 def get_session(candle_time):
     for name in SESSIONS_EST:
+        if name == "all":
+            continue
         if in_session(candle_time, name):
             return name
     return "off_hours"
 
+
 def filter_by_session(candles, session_name):
     return [c for c in candles if in_session(c.time_open, session_name)]
+
+
+def in_day_filter(candle_time, allowed_days):
+    if not allowed_days:
+        return True
+    return candle_time.weekday() in allowed_days
+
 
 def get_asian_range(candles):
     asian = filter_by_session(candles, "asian")

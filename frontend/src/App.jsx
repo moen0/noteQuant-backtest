@@ -1,113 +1,233 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  createChart,
   CandlestickSeries,
   LineSeries,
+  createChart,
   createSeriesMarkers,
-} from "lightweight-charts";
+} from 'lightweight-charts';
+import { BacktestingTab } from './components/BacktestingTab';
+import { OptimizerTab } from './components/OptimizerTab';
+import { TradeHistory } from './components/TradeHistory';
+import { motion } from 'motion/react';
+
+import { EquityCurve } from './components/EquityCurve';
+import { MetricCard } from './components/MetricCard';
+import { PerformanceBreakdown } from './components/PerformanceBreakdown';
+import { TradeDistribution } from './components/TradeDistribution';
 
 const TIMEFRAMES = [
-  { label: "1m", value: 1 },
-  { label: "3m", value: 3 },
-  { label: "5m", value: 5 },
-  { label: "15m", value: 15 },
-  { label: "30m", value: 30 },
-  { label: "1H", value: 60 },
+  { label: '1m', value: 1 },
+  { label: '3m', value: 3 },
+  { label: '5m', value: 5 },
+  { label: '15m', value: 15 },
+  { label: '30m', value: 30 },
+  { label: '1H', value: 60 },
 ];
 
-const RR_OPTIONS = [1.0, 1.5, 2.0, 2.5, 3.0];
+const RR_OPTIONS = [1, 1.5, 2, 2.5, 3];
+const STARTING_BALANCE = 10000;
+const DATASET_FALLBACKS = [
+  { id: '2023gj.csv', label: '2023 GJ', default: true },
+  { id: 'data1.csv', label: 'Data 1', default: false },
+  { id: 'gbpjpy_mars.csv', label: 'Data 3', default: false },
+];
 
-const COLORS = {
-  bg: "#0a0a12",
-  surface: "#12121e",
-  surfaceLight: "#1a1a2e",
-  border: "#1e1e35",
-  borderLight: "#2a2a45",
-  text: "#c8c8d4",
-  textDim: "#6a6a80",
-  textBright: "#eaeaf0",
-  accent: "#6366f1",
-  accentDim: "rgba(99, 102, 241, 0.15)",
-  bullish: "#22c55e",
-  bullishDim: "rgba(34, 197, 94, 0.12)",
-  bearish: "#ef4444",
-  bearishDim: "rgba(239, 68, 68, 0.12)",
-  ob: "#3b82f6",
-  obBearish: "#f59e0b",
-  fvg: "#a855f7",
-  liquidity: "#06b6d4",
-  tradeWin: "#22c55e",
-  tradeLoss: "#ef4444",
-  equity: "#6366f1",
+function formatMoney(value) {
+  return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function buildEquityCurve(trades) {
+  let equity = STARTING_BALANCE;
+  return trades
+    .slice()
+    .sort((a, b) => new Date(a.exit_time) - new Date(b.exit_time))
+    .map((trade) => {
+      equity += trade.pnl;
+      return {
+        date: new Date(trade.exit_time).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        equity: Number(equity.toFixed(2)),
+      };
+    });
+}
+
+function buildMonthlyReturns(trades) {
+  const buckets = new Map();
+  trades
+    .slice()
+    .sort((a, b) => new Date(a.exit_time) - new Date(b.exit_time))
+    .forEach((trade) => {
+      const date = new Date(trade.exit_time);
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      if (!buckets.has(key)) {
+        buckets.set(key, { month: date.toLocaleDateString('en-US', { month: 'short' }), pnl: 0 });
+      }
+      buckets.get(key).pnl += trade.pnl;
+    });
+  return Array.from(buckets.values()).map((entry) => ({
+    month: entry.month,
+    returnPct: Number(((entry.pnl / STARTING_BALANCE) * 100).toFixed(1)),
+  }));
+}
+
+function calculateMaxDrawdown(equityCurve) {
+  if (!equityCurve.length) return 0;
+  let peak = equityCurve[0].equity;
+  let maxDrawdown = 0;
+  equityCurve.forEach((point) => {
+    peak = Math.max(peak, point.equity);
+    const drawdown = ((point.equity - peak) / peak) * 100;
+    maxDrawdown = Math.min(maxDrawdown, drawdown);
+  });
+  return Number(maxDrawdown.toFixed(1));
+}
+
+function calculateSharpeRatio(trades) {
+  if (trades.length < 2) return 0;
+  const returns = trades.map((trade) => trade.pnl / STARTING_BALANCE);
+  const mean = returns.reduce((sum, v) => sum + v, 0) / returns.length;
+  const variance = returns.reduce((sum, v) => sum + (v - mean) ** 2, 0) / returns.length;
+  const stdDev = Math.sqrt(variance);
+  if (!stdDev) return 0;
+  return Number(((mean / stdDev) * Math.sqrt(trades.length)).toFixed(2));
+}
+
+function resolveDatasetLabel(datasets, selectedDataset) {
+  return datasets.find((item) => item.id === selectedDataset)?.label ?? selectedDataset;
+}
+
+const CHART_THEME = {
+  layout: { background: { color: '#0a0a0a' }, textColor: '#737373', fontFamily: 'Inter, system-ui, sans-serif', fontSize: 11 },
+  grid: { vertLines: { color: '#1a1a1a' }, horzLines: { color: '#1a1a1a' } },
+  crosshair: {
+    vertLine: { color: 'rgba(250, 250, 250, 0.15)', labelBackgroundColor: '#262626' },
+    horzLine: { color: 'rgba(250, 250, 250, 0.15)', labelBackgroundColor: '#262626' },
+  },
+  rightPriceScale: { borderColor: '#262626', textColor: '#737373' },
+  timeScale: { borderColor: '#262626', timeVisible: true, secondsVisible: false },
 };
 
-function App() {
+export default function App() {
   const chartContainerRef = useRef(null);
   const equityChartRef = useRef(null);
   const chartRef = useRef(null);
   const equityChartObjRef = useRef(null);
   const candleSeriesRef = useRef(null);
+  const equitySeriesRef = useRef(null);
   const markersRef = useRef(null);
 
+  const [mounted, setMounted] = useState(false);
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [timeframe, setTimeframe] = useState(5);
   const [riskReward, setRiskReward] = useState(2.5);
   const [showBacktest, setShowBacktest] = useState(true);
+  const [datasets, setDatasets] = useState([]);
+  const [selectedDataset, setSelectedDataset] = useState('data.csv');
+  const [chartsReady, setChartsReady] = useState(false);
   const [indicators, setIndicators] = useState({
     structure: true,
     orderBlocks: true,
     fvg: false,
     liquidity: false,
   });
-  const [stats, setStats] = useState(null);
-  const [backtestStats, setBacktestStats] = useState(null);
+  const [backtestData, setBacktestData] = useState(null);
+  const [hasSharedBacktest, setHasSharedBacktest] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [stratParams] = useState({
+    lookback: 7,
+    obAge: 50,
+    atrMult: 2.5,
+    sweep: true,
+    sweepLookback: 5,
+    session: 'london',
+  });
+
+  useEffect(() => { setMounted(true); }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadDatasets = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/api/datasets');
+        const data = await response.json();
+        if (!isMounted) return;
+        const apiDatasets = Array.isArray(data.datasets) ? data.datasets : [];
+        const resolvedDatasets = apiDatasets.length ? apiDatasets : DATASET_FALLBACKS;
+        setDatasets(resolvedDatasets);
+        setSelectedDataset((current) => {
+          const defaultDataset = resolvedDatasets.find((item) => item.default)?.id ?? resolvedDatasets[0]?.id;
+          if (!defaultDataset) return current;
+          if (resolvedDatasets.some((item) => item.id === current && item.default)) return current;
+          if (!resolvedDatasets.some((item) => item.id === current)) return defaultDataset;
+          return current;
+        });
+      } catch {
+        if (!isMounted) return;
+        setDatasets(DATASET_FALLBACKS);
+      }
+    };
+    loadDatasets();
+    return () => { isMounted = false; };
+  }, []);
 
   const toggleIndicator = (key) => {
     setIndicators((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
+  const handleBacktestComplete = useCallback((payload) => {
+    if (!payload) return;
+    setBacktestData(payload);
+    setHasSharedBacktest(true);
+  }, []);
+
   const loadData = useCallback(async () => {
+    const shouldLoadDashboardData = ['dashboard', 'forex-stats', 'trade-history'].includes(activeTab);
+    if (!shouldLoadDashboardData) {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     try {
+      const shouldLoadBacktest = showBacktest || activeTab === 'forex-stats';
+      const shouldFetchBacktest = shouldLoadBacktest && !hasSharedBacktest;
+      const datasetQuery = `dataset=${encodeURIComponent(selectedDataset)}`;
       const fetches = [
-        fetch(`http://localhost:8000/api/candles?timeframe=${timeframe}`),
-        fetch(`http://localhost:8000/api/indicators?timeframe=${timeframe}`),
+        fetch(`http://localhost:8000/api/candles?timeframe=${timeframe}&${datasetQuery}`),
+        fetch(`http://localhost:8000/api/indicators?timeframe=${timeframe}&${datasetQuery}`),
       ];
-      if (showBacktest) {
-        fetches.push(
-            fetch(`http://localhost:8000/api/backtest?timeframe=${timeframe}&rr=${riskReward}`)
-        );
+      if (shouldFetchBacktest) {
+        fetches.push(fetch(`http://localhost:8000/api/backtest?timeframe=${timeframe}&rr=${riskReward}&lookback=${stratParams.lookback}&ob_age=${stratParams.obAge}&atr_mult=${stratParams.atrMult}&sweep=${stratParams.sweep}&sweep_lookback=${stratParams.sweepLookback}&session=${stratParams.session}&${datasetQuery}`));
       }
 
       const responses = await Promise.all(fetches);
       const candleData = await responses[0].json();
       const indicatorData = await responses[1].json();
-      const backtestData = showBacktest ? await responses[2].json() : null;
+      const backtestPayload = shouldFetchBacktest
+        ? await responses[2].json()
+        : (shouldLoadBacktest ? backtestData : null);
 
-      const formatted = candleData.candles.map((c) => ({
-        time: Math.floor(new Date(c.time).getTime() / 1000),
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
+      const candles = candleData.candles.map((candle) => ({
+        time: Math.floor(new Date(candle.time).getTime() / 1000),
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
       }));
 
-      if (candleSeriesRef.current) {
-        candleSeriesRef.current.setData(formatted);
-      }
+      candleSeriesRef.current?.setData(candles);
 
       const times = indicatorData.candle_times;
       const markers = [];
 
       if (indicators.structure) {
-        indicatorData.structure.forEach((s) => {
-          if (s.index < times.length) {
+        indicatorData.structure.forEach((swing) => {
+          if (swing.index < times.length) {
             markers.push({
-              time: Math.floor(new Date(times[s.index]).getTime() / 1000),
-              position: s.type === "high" ? "aboveBar" : "belowBar",
-              color: s.label === "HH" || s.label === "HL" ? COLORS.bullish : COLORS.bearish,
-              shape: s.type === "high" ? "arrowDown" : "arrowUp",
-              text: s.label,
+              time: Math.floor(new Date(times[swing.index]).getTime() / 1000),
+              position: swing.type === 'high' ? 'aboveBar' : 'belowBar',
+              color: swing.label === 'HH' || swing.label === 'HL' ? '#10b981' : '#ef4444',
+              shape: swing.type === 'high' ? 'arrowDown' : 'arrowUp',
+              text: swing.label,
             });
           }
         });
@@ -118,116 +238,100 @@ function App() {
           if (ob.index < times.length) {
             markers.push({
               time: Math.floor(new Date(times[ob.index]).getTime() / 1000),
-              position: ob.type === "bullish" ? "belowBar" : "aboveBar",
-              color: ob.type === "bullish" ? COLORS.ob : COLORS.obBearish,
-              shape: "square",
-              text: "OB",
+              position: ob.type === 'bullish' ? 'belowBar' : 'aboveBar',
+              color: ob.type === 'bullish' ? '#3b82f6' : '#f59e0b',
+              shape: 'square',
+              text: 'OB',
             });
           }
         });
       }
 
       if (indicators.fvg) {
-        indicatorData.fvgs.forEach((f) => {
-          if (f.index < times.length) {
+        indicatorData.fvgs.forEach((fvg) => {
+          if (fvg.index < times.length) {
             markers.push({
-              time: Math.floor(new Date(times[f.index]).getTime() / 1000),
-              position: f.type === "bullish" ? "belowBar" : "aboveBar",
-              color: COLORS.fvg,
-              shape: "circle",
-              text: "FVG",
+              time: Math.floor(new Date(times[fvg.index]).getTime() / 1000),
+              position: fvg.type === 'bullish' ? 'belowBar' : 'aboveBar',
+              color: '#a855f7',
+              shape: 'circle',
+              text: 'FVG',
             });
           }
         });
       }
 
       if (indicators.liquidity) {
-        indicatorData.liquidity.forEach((l) => {
-          l.indexes.forEach((idx) => {
-            if (idx < times.length) {
+        indicatorData.liquidity.forEach((liq) => {
+          liq.indexes.forEach((index) => {
+            if (index < times.length) {
               markers.push({
-                time: Math.floor(new Date(times[idx]).getTime() / 1000),
-                position: l.type === "equal_highs" ? "aboveBar" : "belowBar",
-                color: COLORS.liquidity,
-                shape: "circle",
-                text: l.type === "equal_highs" ? "EQH" : "EQL",
+                time: Math.floor(new Date(times[index]).getTime() / 1000),
+                position: liq.type === 'equal_highs' ? 'aboveBar' : 'belowBar',
+                color: '#06b6d4',
+                shape: 'circle',
+                text: liq.type === 'equal_highs' ? 'EQH' : 'EQL',
               });
             }
           });
         });
       }
 
-      if (showBacktest && backtestData && backtestData.trades) {
-        backtestData.trades.forEach((t) => {
-          const isWin = t.pnl > 0;
+      if (backtestPayload?.trades) {
+        backtestPayload.trades.forEach((trade) => {
+          const isWin = trade.pnl > 0;
           markers.push({
-            time: Math.floor(new Date(t.enter_time).getTime() / 1000),
-            position: t.direction === "long" ? "belowBar" : "aboveBar",
-            color: isWin ? COLORS.tradeWin : COLORS.tradeLoss,
-            shape: t.direction === "long" ? "arrowUp" : "arrowDown",
-            text: t.direction === "long" ? "BUY" : "SELL",
+            time: Math.floor(new Date(trade.enter_time).getTime() / 1000),
+            position: trade.direction === 'long' ? 'belowBar' : 'aboveBar',
+            color: isWin ? '#10b981' : '#ef4444',
+            shape: trade.direction === 'long' ? 'arrowUp' : 'arrowDown',
+            text: trade.direction === 'long' ? 'BUY' : 'SELL',
           });
           markers.push({
-            time: Math.floor(new Date(t.exit_time).getTime() / 1000),
-            position: "inBar",
-            color: isWin ? COLORS.tradeWin : COLORS.tradeLoss,
-            shape: "circle",
-            text: isWin ? `+${t.pnl.toFixed(2)}` : t.pnl.toFixed(2),
+            time: Math.floor(new Date(trade.exit_time).getTime() / 1000),
+            position: 'inBar',
+            color: isWin ? '#10b981' : '#ef4444',
+            shape: 'circle',
+            text: isWin ? `+${trade.pnl.toFixed(2)}` : trade.pnl.toFixed(2),
           });
         });
-
-        setBacktestStats(backtestData.stats);
-
-        if (equityChartObjRef.current && backtestData.trades.length > 0) {
-          let cumPnl = 0;
-          const equityData = backtestData.trades.map((t) => {
-            cumPnl += t.pnl;
-            return {
-              time: Math.floor(new Date(t.exit_time).getTime() / 1000),
-              value: parseFloat(cumPnl.toFixed(4)),
-            };
-          });
-
-          const eChart = equityChartObjRef.current;
-          const equitySeries = eChart.addSeries(LineSeries, {
-            color: COLORS.equity,
-            lineWidth: 2,
-            priceLineVisible: false,
-            lastValueVisible: true,
-          });
-          equitySeries.setData(equityData);
-          eChart.timeScale().fitContent();
-        }
-      } else {
-        setBacktestStats(null);
       }
 
       markers.sort((a, b) => a.time - b.time);
-
-      if (markersRef.current) {
-        markersRef.current.setMarkers([]);
-      }
+      markersRef.current?.setMarkers([]);
       markersRef.current = createSeriesMarkers(candleSeriesRef.current, markers);
-      chartRef.current.timeScale().fitContent();
+      chartRef.current?.timeScale().fitContent();
 
-      const bullishOB = indicatorData.order_blocks.filter((o) => o.type === "bullish").length;
-      const bearishOB = indicatorData.order_blocks.filter((o) => o.type === "bearish").length;
+      if (backtestPayload?.trades?.length) {
+        const equityCurve = buildEquityCurve(backtestPayload.trades);
+        const sortedTrades = backtestPayload.trades.slice().sort((a, b) => new Date(a.exit_time) - new Date(b.exit_time));
+        const equityData = equityCurve.map((point, index) => ({
+          time: Math.floor(new Date(sortedTrades[index].exit_time).getTime() / 1000),
+          value: point.equity,
+        }));
+        equitySeriesRef.current?.setData(equityData);
+        equityChartObjRef.current?.timeScale().fitContent();
+      } else {
+        equitySeriesRef.current?.setData([]);
+      }
 
-      setStats({
-        candles: candleData.candles.length,
-        swings: indicatorData.swings.length,
-        structure: indicatorData.structure.length,
-        orderBlocks: indicatorData.order_blocks.length,
-        bullishOB,
-        bearishOB,
-        fvgs: indicatorData.fvgs.length,
-        liquidity: indicatorData.liquidity.length,
-      });
-    } catch (err) {
-      console.error("Failed to load data:", err);
+      if (shouldFetchBacktest) {
+        setBacktestData(backtestPayload);
+      }
+    } catch (error) {
+      console.error('Failed to load data:', error);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  }, [timeframe, indicators, showBacktest, riskReward]);
+  }, [activeTab, backtestData, hasSharedBacktest, indicators, riskReward, selectedDataset, showBacktest, timeframe]);
+
+  useEffect(() => {
+    setHasSharedBacktest(false);
+  }, [selectedDataset]);
+
+  useEffect(() => {
+    if (chartRef.current && candleSeriesRef.current) loadData();
+  }, [loadData, chartsReady]);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -235,308 +339,396 @@ function App() {
     const chart = createChart(chartContainerRef.current, {
       width: chartContainerRef.current.clientWidth,
       height: 480,
-      layout: {
-        background: { color: COLORS.surface },
-        textColor: COLORS.textDim,
-        fontFamily: "'IBM Plex Mono', monospace",
-        fontSize: 11,
-      },
-      grid: {
-        vertLines: { color: COLORS.border },
-        horzLines: { color: COLORS.border },
-      },
-      crosshair: {
-        vertLine: { color: "rgba(99, 102, 241, 0.3)", labelBackgroundColor: COLORS.accent },
-        horzLine: { color: "rgba(99, 102, 241, 0.3)", labelBackgroundColor: COLORS.accent },
-      },
-      rightPriceScale: { borderColor: COLORS.border, textColor: COLORS.textDim },
-      timeScale: { borderColor: COLORS.border, timeVisible: true, secondsVisible: false },
+      ...CHART_THEME,
     });
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: COLORS.bullish,
-      downColor: COLORS.bearish,
+      upColor: '#10b981',
+      downColor: '#ef4444',
       borderVisible: false,
-      wickUpColor: COLORS.bullish,
-      wickDownColor: COLORS.bearish,
+      wickUpColor: '#10b981',
+      wickDownColor: '#ef4444',
     });
 
     chartRef.current = chart;
     candleSeriesRef.current = candleSeries;
 
     if (equityChartRef.current) {
-      const eChart = createChart(equityChartRef.current, {
+      const equityChart = createChart(equityChartRef.current, {
         width: equityChartRef.current.clientWidth,
-        height: 160,
-        layout: {
-          background: { color: COLORS.surface },
-          textColor: COLORS.textDim,
-          fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: 10,
-        },
-        grid: {
-          vertLines: { color: COLORS.border },
-          horzLines: { color: COLORS.border },
-        },
-        rightPriceScale: { borderColor: COLORS.border },
-        timeScale: { borderColor: COLORS.border, timeVisible: true, secondsVisible: false },
-        crosshair: {
-          vertLine: { color: "rgba(99, 102, 241, 0.3)", labelBackgroundColor: COLORS.accent },
-          horzLine: { color: "rgba(99, 102, 241, 0.3)", labelBackgroundColor: COLORS.accent },
-        },
+        height: 180,
+        ...CHART_THEME,
+        layout: { ...CHART_THEME.layout, fontSize: 10 },
       });
-      equityChartObjRef.current = eChart;
+
+      equityChartObjRef.current = equityChart;
+      equitySeriesRef.current = equityChart.addSeries(LineSeries, {
+        color: '#10b981',
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: true,
+      });
     }
 
-    const handleResize = () => {
-      if (chartContainerRef.current)
-        chart.applyOptions({ width: chartContainerRef.current.clientWidth });
-      if (equityChartRef.current && equityChartObjRef.current)
-        equityChartObjRef.current.applyOptions({ width: equityChartRef.current.clientWidth });
-    };
-    window.addEventListener("resize", handleResize);
+    setChartsReady(true);
 
+    const handleResize = () => {
+      if (chartContainerRef.current) chart.applyOptions({ width: chartContainerRef.current.clientWidth });
+      if (equityChartRef.current && equityChartObjRef.current) equityChartObjRef.current.applyOptions({ width: equityChartRef.current.clientWidth });
+    };
+
+    window.addEventListener('resize', handleResize);
     return () => {
-      window.removeEventListener("resize", handleResize);
+      window.removeEventListener('resize', handleResize);
       chart.remove();
-      if (equityChartObjRef.current) equityChartObjRef.current.remove();
+      equityChartObjRef.current?.remove();
     };
   }, []);
 
   useEffect(() => {
-    if (chartRef.current && candleSeriesRef.current) loadData();
-  }, [loadData]);
+    if (activeTab !== 'dashboard') return;
+    let secondaryFrame = 0;
+    const primaryFrame = requestAnimationFrame(() => {
+      secondaryFrame = requestAnimationFrame(() => {
+        if (chartRef.current && chartContainerRef.current) {
+          chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth });
+          chartRef.current.timeScale().fitContent();
+        }
+        if (showBacktest && equityChartObjRef.current && equityChartRef.current) {
+          equityChartObjRef.current.applyOptions({ width: equityChartRef.current.clientWidth });
+          equityChartObjRef.current.timeScale().fitContent();
+        }
+      });
+    });
+    return () => { cancelAnimationFrame(primaryFrame); cancelAnimationFrame(secondaryFrame); };
+  }, [activeTab, showBacktest]);
+
+  const backtestTrades = backtestData?.trades ?? [];
+  const backtestStats = backtestData?.stats ?? null;
+  const equityCurve = useMemo(() => buildEquityCurve(backtestTrades), [backtestTrades]);
+  const monthlyReturns = useMemo(() => buildMonthlyReturns(backtestTrades), [backtestTrades]);
+  const maxDrawdown = useMemo(() => calculateMaxDrawdown(equityCurve), [equityCurve]);
+  const sharpeRatio = useMemo(() => calculateSharpeRatio(backtestTrades), [backtestTrades]);
+  const largestWin = useMemo(() => backtestTrades.reduce((best, t) => Math.max(best, t.pnl), 0), [backtestTrades]);
+  const largestLoss = useMemo(() => backtestTrades.reduce((worst, t) => Math.min(worst, t.pnl), 0), [backtestTrades]);
+  const grossProfit = backtestStats ? backtestStats.winners * backtestStats.avg_win : 0;
+  const grossLoss = backtestStats ? Math.abs(backtestStats.losers * backtestStats.avg_loss) : 0;
+  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : 0;
+  const netPnl = backtestStats?.total_pnl ?? 0;
+  const winRate = backtestStats?.win_rate ?? 0;
+  const totalTrades = backtestStats?.total_trades ?? 0;
+  const avgWin = backtestStats?.avg_win ?? 0;
+  const avgLoss = backtestStats?.avg_loss ?? 0;
+  const partialTpRate = backtestStats?.partial_tp_rate ?? 0;
+  const selectedDatasetLabel = resolveDatasetLabel(datasets, selectedDataset);
+
+  const overviewMetrics = [
+    { label: 'Net P/L', value: `$${formatMoney(netPnl)}`, change: (netPnl / STARTING_BALANCE) * 100, isPositive: netPnl > 0, isPrimary: true },
+    { label: 'Win Rate', value: `${winRate.toFixed(1)}%`, isPositive: winRate > 50 },
+    { label: 'Profit Factor', value: profitFactor.toFixed(2), isPositive: profitFactor > 1 },
+    { label: 'Partial TP %', value: `${partialTpRate.toFixed(1)}%`, isPositive: partialTpRate > 0, neutral: partialTpRate === 0 },
+    { label: 'Max Drawdown', value: `${maxDrawdown.toFixed(1)}%`, isPositive: false },
+    { label: 'Sharpe Ratio', value: sharpeRatio.toFixed(2), isPositive: sharpeRatio > 1 },
+    { label: 'Total Trades', value: totalTrades.toString(), neutral: true },
+  ];
+
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    visible: { opacity: 1, transition: { staggerChildren: 0.08, delayChildren: 0.08 } },
+  };
+
+  const itemVariants = {
+    hidden: { opacity: 0, y: 18 },
+    visible: { opacity: 1, y: 0, transition: { duration: 0.52, ease: [0.22, 1, 0.36, 1] } },
+  };
+
+  const OVERLAY_ITEMS = [
+    { key: 'structure', label: 'Structure', color: '#10b981' },
+    { key: 'orderBlocks', label: 'Order Blocks', color: '#3b82f6' },
+    { key: 'fvg', label: 'FVG', color: '#a855f7' },
+    { key: 'liquidity', label: 'Liquidity', color: '#06b6d4' },
+  ];
 
   return (
-      <div style={styles.root}>
-        <link
-            href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap"
-            rel="stylesheet"
-        />
+    <div className="min-h-screen bg-black text-[#fafafa]">
+      <div className="max-w-[1440px] mx-auto px-6 py-8">
 
-        <header style={styles.header}>
-          <div style={styles.headerLeft}>
-            <div style={styles.logo}>
-              <div style={styles.logoIcon}>nQ</div>
-              <div>
-                <div style={styles.logoTitle}>noteQuant</div>
-                <div style={styles.logoSub}>ICT/SMC Backtester</div>
-              </div>
+        {/* Header */}
+        <motion.header
+          className="flex justify-between items-center gap-4 mb-8 flex-wrap"
+          variants={itemVariants}
+          initial="hidden"
+          animate={mounted ? 'visible' : 'hidden'}
+        >
+          <div className="flex items-center gap-4">
+            <div className="w-10 h-10 bg-[#fafafa] text-black font-mono font-bold text-[13px] flex items-center justify-center tracking-tight">
+              nQ
+            </div>
+            <div>
+              <div className="text-[17px] font-semibold tracking-tight">noteQuant</div>
+              <div className="text-[11px] text-[#737373] font-mono uppercase tracking-widest">ICT / SMC Backtester</div>
             </div>
           </div>
-          <div style={styles.headerRight}>
-            <div style={styles.pairBadge}>
-              <span style={styles.pairFlag}>GBP/JPY</span>
-              <span style={styles.pairLabel}>Forex</span>
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-2 px-3 py-2 border border-[#262626] bg-[#0a0a0a] text-[13px] font-mono">
+              <span className="text-[#737373]">Dataset</span>
+              <span>{selectedDatasetLabel}</span>
             </div>
-            {loading && <div style={styles.loadingDot} />}
+            <div className="flex items-center gap-2 px-3 py-2 border border-[#262626] bg-[#0a0a0a] text-[13px] font-mono">
+              <span className="text-[#737373]">Pair</span>
+              <span>GBP/JPY</span>
+            </div>
+            {loading && (
+              <div className="w-2 h-2 bg-[#10b981] animate-pulse" />
+            )}
           </div>
-        </header>
+        </motion.header>
 
-        <div style={styles.controls}>
-          <div style={styles.controlGroup}>
-            <span style={styles.controlLabel}>Timeframe</span>
-            <div style={styles.tfGroup}>
-              {TIMEFRAMES.map((tf) => (
-                  <button
+        {/* Tabs */}
+        <div className="flex gap-2 mb-8 border-b border-[#262626] pb-4">
+          {[
+            { id: 'dashboard', label: 'Dashboard' },
+            { id: 'forex-stats', label: 'Forex Stats' },
+            { id: 'trade-history', label: 'Trade History' },
+            { id: 'backtesting', label: 'Backtesting' },
+            { id: 'optimizer', label: 'Optimizer' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              className={`px-4 py-2 text-[13px] font-semibold font-mono border transition-colors ${
+                activeTab === tab.id
+                  ? 'bg-[#fafafa] text-black border-[#fafafa]'
+                  : 'bg-transparent text-[#737373] border-[#262626] hover:text-[#fafafa] hover:border-[#404040]'
+              }`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Dashboard Tab */}
+        <motion.div
+          className="space-y-6"
+          variants={containerVariants}
+          initial="hidden"
+          animate={mounted ? 'visible' : 'hidden'}
+          style={{ display: activeTab === 'dashboard' ? 'block' : 'none' }}
+        >
+          {/* Toolbar */}
+          <motion.div variants={itemVariants} className="p-5 border border-[#262626] bg-[#0a0a0a]">
+            <div className="flex flex-wrap gap-6 items-center">
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] text-[#737373] font-mono uppercase tracking-widest">Timeframe</span>
+                <div className="flex border border-[#262626]">
+                  {TIMEFRAMES.map((tf) => (
+                    <button
                       key={tf.value}
+                      className={`px-3 py-1.5 text-[12px] font-mono transition-colors ${
+                        timeframe === tf.value
+                          ? 'bg-[#fafafa] text-black'
+                          : 'text-[#737373] hover:text-[#fafafa]'
+                      }`}
                       onClick={() => setTimeframe(tf.value)}
-                      style={{ ...styles.tfBtn, ...(timeframe === tf.value ? styles.tfBtnActive : {}) }}
-                  >
-                    {tf.label}
-                  </button>
-              ))}
-            </div>
-          </div>
+                    >
+                      {tf.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-          <div style={styles.controlGroup}>
-            <span style={styles.controlLabel}>R:R</span>
-            <div style={styles.tfGroup}>
-              {RR_OPTIONS.map((rr) => (
-                  <button
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] text-[#737373] font-mono uppercase tracking-widest">R:R</span>
+                <div className="flex border border-[#262626]">
+                  {RR_OPTIONS.map((rr) => (
+                    <button
                       key={rr}
+                      className={`px-3 py-1.5 text-[12px] font-mono transition-colors ${
+                        riskReward === rr
+                          ? 'bg-[#fafafa] text-black'
+                          : 'text-[#737373] hover:text-[#fafafa]'
+                      }`}
                       onClick={() => setRiskReward(rr)}
-                      style={{ ...styles.tfBtn, ...(riskReward === rr ? styles.tfBtnActive : {}) }}
-                  >
-                    1:{rr}
-                  </button>
-              ))}
-            </div>
-          </div>
+                    >
+                      1:{rr}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-          <div style={styles.controlGroup}>
-            <span style={styles.controlLabel}>Overlays</span>
-            <div style={styles.indicatorGroup}>
-              {[
-                { key: "structure", label: "Structure", color: COLORS.bullish },
-                { key: "orderBlocks", label: "Order Blocks", color: COLORS.ob },
-                { key: "fvg", label: "FVG", color: COLORS.fvg },
-                { key: "liquidity", label: "Liquidity", color: COLORS.liquidity },
-              ].map((ind) => (
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-[11px] text-[#737373] font-mono uppercase tracking-widest">Overlays</span>
+                <div className="flex flex-wrap gap-2">
+                  {OVERLAY_ITEMS.map((item) => (
+                    <button
+                      key={item.key}
+                      className={`flex items-center gap-2 px-3 py-1.5 text-[12px] font-mono border transition-colors ${
+                        indicators[item.key]
+                          ? 'border-[#404040] text-[#fafafa]'
+                          : 'border-[#262626] text-[#525252]'
+                      }`}
+                      onClick={() => toggleIndicator(item.key)}
+                    >
+                      <span
+                        className="w-1.5 h-1.5"
+                        style={{ background: indicators[item.key] ? item.color : '#525252' }}
+                      />
+                      {item.label}
+                    </button>
+                  ))}
                   <button
-                      key={ind.key}
-                      onClick={() => toggleIndicator(ind.key)}
-                      style={{
-                        ...styles.indBtn,
-                        ...(indicators[ind.key]
-                            ? { borderColor: ind.color, background: `${ind.color}15`, color: ind.color }
-                            : {}),
-                      }}
+                    className={`flex items-center gap-2 px-3 py-1.5 text-[12px] font-mono border transition-colors ${
+                      showBacktest
+                        ? 'border-[#404040] text-[#fafafa]'
+                        : 'border-[#262626] text-[#525252]'
+                    }`}
+                    onClick={() => setShowBacktest((prev) => !prev)}
                   >
-                <span
-                    style={{
-                      ...styles.indDot,
-                      background: indicators[ind.key] ? ind.color : COLORS.textDim,
-                    }}
-                />
-                    {ind.label}
+                    <span
+                      className="w-1.5 h-1.5"
+                      style={{ background: showBacktest ? '#fafafa' : '#525252' }}
+                    />
+                    Trades
                   </button>
-              ))}
-              <button
-                  onClick={() => setShowBacktest((prev) => !prev)}
-                  style={{
-                    ...styles.indBtn,
-                    ...(showBacktest
-                        ? { borderColor: COLORS.accent, background: COLORS.accentDim, color: COLORS.accent }
-                        : {}),
-                  }}
+                </div>
+              </div>
+            </div>
+          </motion.div>
+
+          {/* Candlestick Chart */}
+          <motion.section variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
+            <div className="mb-4">
+              <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest mb-1">Market Chart</p>
+              <h2 className="text-[20px] font-semibold tracking-tight">Candles with structure and trade markers</h2>
+            </div>
+            <div ref={chartContainerRef} className="h-[480px] border border-[#1a1a1a] overflow-hidden" />
+          </motion.section>
+
+          {/* Equity Line (lightweight-charts) */}
+          {showBacktest && (
+            <motion.section variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
+              <div className="mb-4">
+                <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest mb-1">Equity Curve</p>
+                <h2 className="text-[20px] font-semibold tracking-tight">Strategy balance progression</h2>
+              </div>
+              <div ref={equityChartRef} className="h-[180px] border border-[#1a1a1a] overflow-hidden" />
+            </motion.section>
+          )}
+        </motion.div>
+
+        {/* Stats Tab */}
+        <motion.div
+          className="space-y-6"
+          variants={containerVariants}
+          initial="hidden"
+          animate={mounted ? 'visible' : 'hidden'}
+          style={{ display: activeTab === 'forex-stats' ? 'block' : 'none' }}
+        >
+          {/* Hero */}
+          <motion.section variants={itemVariants} className="grid grid-cols-1 lg:grid-cols-[1.7fr_0.9fr] gap-6 p-8 border border-[#262626] bg-[#0a0a0a]">
+            <div className="flex flex-col gap-4">
+              <div className="flex gap-3 flex-wrap text-[13px] font-mono">
+              </div>
+            </div>
+            <div className="flex flex-col justify-center gap-3 p-5 border border-[#262626] bg-black">
+              <span className="text-[11px] text-[#737373] font-mono uppercase tracking-widest">Dataset</span>
+              <select
+                className="w-full border border-[#262626] bg-black text-[#fafafa] font-mono text-sm p-3 outline-none focus:border-[#404040] transition-colors"
+                value={selectedDataset}
+                onChange={(e) => setSelectedDataset(e.target.value)}
               >
-              <span
-                  style={{ ...styles.indDot, background: showBacktest ? COLORS.accent : COLORS.textDim }}
+                {datasets.map((dataset) => (
+                  <option key={dataset.id} value={dataset.id}>{dataset.label}</option>
+                ))}
+              </select>
+              <p className="text-[11px] text-[#525252] font-mono">Switch CSVs here to refresh all metrics and charts.</p>
+            </div>
+          </motion.section>
+          
+          {/* Metrics Grid */}
+          <motion.section variants={itemVariants} className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            {overviewMetrics.map((metric) => (
+              <MetricCard
+                key={metric.label}
+                label={metric.label}
+                value={metric.value}
+                change={metric.change}
+                isPositive={metric.isPositive}
+                isPrimary={metric.isPrimary}
+                neutral={metric.neutral}
               />
-                Trades
-              </button>
-            </div>
-          </div>
-        </div>
+            ))}
+          </motion.section>
 
-        <div style={styles.chartWrapper}>
-          <div ref={chartContainerRef} style={styles.chart} />
-        </div>
+          {/* Equity Curve (recharts) */}
+          <motion.section variants={itemVariants}>
+            <EquityCurve data={equityCurve} startingBalance={STARTING_BALANCE} />
+          </motion.section>
 
-        {showBacktest && (
-            <div style={styles.chartWrapper}>
-              <div style={styles.sectionLabel}>Equity Curve</div>
-              <div ref={equityChartRef} style={styles.chart} />
-            </div>
+          {/* Distribution + Breakdown */}
+          <motion.div variants={itemVariants} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <TradeDistribution
+              wins={backtestStats?.winners ?? 0}
+              losses={backtestStats?.losers ?? 0}
+              avgWin={avgWin}
+              avgLoss={avgLoss}
+              largestWin={largestWin}
+              largestLoss={largestLoss}
+            />
+            <PerformanceBreakdown
+              monthlyReturns={monthlyReturns}
+              largestWin={largestWin}
+              largestLoss={largestLoss}
+              maxDrawdown={maxDrawdown}
+              sharpeRatio={sharpeRatio}
+            />
+          </motion.div>
+        </motion.div>
+
+        {/* Trade History Tab */}
+        <motion.div
+          className="space-y-6"
+          variants={containerVariants}
+          initial="hidden"
+          animate={mounted ? 'visible' : 'hidden'}
+          style={{ display: activeTab === 'trade-history' ? 'block' : 'none' }}
+        >
+          <motion.section variants={itemVariants}>
+            <TradeHistory trades={backtestTrades} />
+          </motion.section>
+        </motion.div>
+
+        {/* Backtesting Tab */}
+        {activeTab === 'backtesting' && (
+            <motion.div
+                variants={containerVariants}
+                initial="hidden"
+                animate={mounted ? 'visible' : 'hidden'}
+            >
+              <BacktestingTab
+                  datasets={datasets}
+                  selectedDataset={selectedDataset}
+                  onDatasetChange={setSelectedDataset}
+                  onBacktestComplete={handleBacktestComplete}
+              />
+            </motion.div>
         )}
 
-        {backtestStats && showBacktest && (
-            <div style={styles.backtestBar}>
-              <div style={styles.backtestTitle}>ICT Strategy Backtest</div>
-              <div style={styles.backtestGrid}>
-                <div style={styles.btStat}>
-                  <span style={styles.btValue}>{backtestStats.total_trades}</span>
-                  <span style={styles.btLabel}>Trades</span>
-                </div>
-                <div style={styles.btStat}>
-              <span style={{ ...styles.btValue, color: backtestStats.win_rate >= 50 ? COLORS.bullish : COLORS.bearish }}>
-                {backtestStats.win_rate.toFixed(1)}%
-              </span>
-                  <span style={styles.btLabel}>Win Rate</span>
-                </div>
-                <div style={styles.btStat}>
-              <span style={{ ...styles.btValue, color: backtestStats.total_pnl >= 0 ? COLORS.bullish : COLORS.bearish }}>
-                {backtestStats.total_pnl >= 0 ? "+" : ""}{backtestStats.total_pnl.toFixed(2)}
-              </span>
-                  <span style={styles.btLabel}>Total PnL</span>
-                </div>
-                <div style={styles.btStat}>
-                  <span style={{ ...styles.btValue, color: COLORS.bullish }}>{backtestStats.winners}</span>
-                  <span style={styles.btLabel}>Winners</span>
-                </div>
-                <div style={styles.btStat}>
-                  <span style={{ ...styles.btValue, color: COLORS.bearish }}>{backtestStats.losers}</span>
-                  <span style={styles.btLabel}>Losers</span>
-                </div>
-                <div style={styles.btStat}>
-                  <span style={{ ...styles.btValue, color: COLORS.bullish }}>+{backtestStats.avg_win.toFixed(3)}</span>
-                  <span style={styles.btLabel}>Avg Win</span>
-                </div>
-                <div style={styles.btStat}>
-                  <span style={{ ...styles.btValue, color: COLORS.bearish }}>{backtestStats.avg_loss.toFixed(3)}</span>
-                  <span style={styles.btLabel}>Avg Loss</span>
-                </div>
-                <div style={styles.btStat}>
-                  <span style={{ ...styles.btValue, color: COLORS.accent }}>1:{backtestStats.risk_reward}</span>
-                  <span style={styles.btLabel}>R:R</span>
-                </div>
-              </div>
-            </div>
-        )}
-
-        {stats && (
-            <div style={styles.statsBar}>
-              <div style={styles.statItem}>
-                <span style={styles.statValue}>{stats.candles.toLocaleString()}</span>
-                <span style={styles.statLabel}>Candles</span>
-              </div>
-              <div style={styles.statDivider} />
-              <div style={styles.statItem}>
-                <span style={styles.statValue}>{stats.swings}</span>
-                <span style={styles.statLabel}>Swings</span>
-              </div>
-              <div style={styles.statDivider} />
-              <div style={styles.statItem}>
-                <span style={{ ...styles.statValue, color: COLORS.bullish }}>{stats.bullishOB}</span>
-                <span style={styles.statLabel}>Bull OB</span>
-              </div>
-              <div style={styles.statItem}>
-                <span style={{ ...styles.statValue, color: COLORS.bearish }}>{stats.bearishOB}</span>
-                <span style={styles.statLabel}>Bear OB</span>
-              </div>
-              <div style={styles.statDivider} />
-              <div style={styles.statItem}>
-                <span style={{ ...styles.statValue, color: COLORS.fvg }}>{stats.fvgs}</span>
-                <span style={styles.statLabel}>FVGs</span>
-              </div>
-              <div style={styles.statDivider} />
-              <div style={styles.statItem}>
-                <span style={{ ...styles.statValue, color: COLORS.liquidity }}>{stats.liquidity}</span>
-                <span style={styles.statLabel}>Liq Levels</span>
-              </div>
-            </div>
+        {activeTab === 'optimizer' && (
+          <motion.div
+            variants={containerVariants}
+            initial="hidden"
+            animate={mounted ? 'visible' : 'hidden'}
+          >
+            <OptimizerTab
+              datasets={datasets}
+              selectedDataset={selectedDataset}
+              onDatasetChange={setSelectedDataset}
+            />
+          </motion.div>
         )}
       </div>
+    </div>
   );
+
 }
-
-const styles = {
-  root: { minHeight: "100vh", background: COLORS.bg, fontFamily: "'Outfit', sans-serif", color: COLORS.text, padding: "0" },
-  header: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 24px", borderBottom: `1px solid ${COLORS.border}` },
-  headerLeft: { display: "flex", alignItems: "center", gap: "16px" },
-  headerRight: { display: "flex", alignItems: "center", gap: "12px" },
-  logo: { display: "flex", alignItems: "center", gap: "12px" },
-  logoIcon: { width: "36px", height: "36px", borderRadius: "8px", background: `linear-gradient(135deg, ${COLORS.accent}, #818cf8)`, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'IBM Plex Mono', monospace", fontWeight: "700", fontSize: "13px", color: "#fff", letterSpacing: "-0.5px" },
-  logoTitle: { fontSize: "16px", fontWeight: "600", color: COLORS.textBright, letterSpacing: "-0.3px" },
-  logoSub: { fontSize: "11px", color: COLORS.textDim, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.5px", textTransform: "uppercase" },
-  pairBadge: { display: "flex", alignItems: "center", gap: "8px", padding: "6px 12px", background: COLORS.surfaceLight, borderRadius: "6px", border: `1px solid ${COLORS.border}` },
-  pairFlag: { fontFamily: "'IBM Plex Mono', monospace", fontWeight: "600", fontSize: "13px", color: COLORS.textBright },
-  pairLabel: { fontSize: "10px", color: COLORS.textDim, textTransform: "uppercase", letterSpacing: "1px" },
-  loadingDot: { width: "8px", height: "8px", borderRadius: "50%", background: COLORS.accent, animation: "pulse 1.5s infinite" },
-  controls: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 24px", borderBottom: `1px solid ${COLORS.border}`, flexWrap: "wrap", gap: "12px" },
-  controlGroup: { display: "flex", alignItems: "center", gap: "10px" },
-  controlLabel: { fontSize: "10px", fontWeight: "500", color: COLORS.textDim, textTransform: "uppercase", letterSpacing: "1.2px", fontFamily: "'IBM Plex Mono', monospace" },
-  tfGroup: { display: "flex", gap: "2px", background: COLORS.surface, borderRadius: "6px", padding: "2px", border: `1px solid ${COLORS.border}` },
-  tfBtn: { padding: "6px 12px", fontSize: "12px", fontWeight: "500", fontFamily: "'IBM Plex Mono', monospace", color: COLORS.textDim, background: "transparent", border: "none", borderRadius: "4px", cursor: "pointer", transition: "all 0.15s ease" },
-  tfBtnActive: { background: COLORS.accent, color: "#fff", boxShadow: `0 0 12px ${COLORS.accentDim}` },
-  indicatorGroup: { display: "flex", gap: "6px", flexWrap: "wrap" },
-  indBtn: { display: "flex", alignItems: "center", gap: "6px", padding: "6px 12px", fontSize: "11px", fontWeight: "500", fontFamily: "'Outfit', sans-serif", color: COLORS.textDim, background: COLORS.surface, border: `1px solid ${COLORS.border}`, borderRadius: "6px", cursor: "pointer", transition: "all 0.15s ease" },
-  indDot: { width: "6px", height: "6px", borderRadius: "50%" },
-  chartWrapper: { padding: "12px 24px" },
-  chart: { borderRadius: "8px", overflow: "hidden", border: `1px solid ${COLORS.border}` },
-  sectionLabel: { fontSize: "10px", fontWeight: "500", color: COLORS.textDim, textTransform: "uppercase", letterSpacing: "1.2px", fontFamily: "'IBM Plex Mono', monospace", marginBottom: "8px" },
-  backtestBar: { margin: "0 24px 16px", padding: "16px 20px", background: COLORS.surface, borderRadius: "8px", border: `1px solid ${COLORS.border}` },
-  backtestTitle: { fontSize: "11px", fontWeight: "600", color: COLORS.textDim, textTransform: "uppercase", letterSpacing: "1.2px", fontFamily: "'IBM Plex Mono', monospace", marginBottom: "12px" },
-  backtestGrid: { display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: "12px" },
-  btStat: { display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" },
-  btValue: { fontFamily: "'IBM Plex Mono', monospace", fontSize: "16px", fontWeight: "600", color: COLORS.textBright },
-  btLabel: { fontSize: "9px", fontWeight: "500", color: COLORS.textDim, textTransform: "uppercase", letterSpacing: "0.8px" },
-  statsBar: { display: "flex", alignItems: "center", gap: "20px", padding: "14px 24px", margin: "0 24px 24px", background: COLORS.surface, borderRadius: "8px", border: `1px solid ${COLORS.border}`, flexWrap: "wrap" },
-  statItem: { display: "flex", flexDirection: "column", alignItems: "center", gap: "2px" },
-  statValue: { fontFamily: "'IBM Plex Mono', monospace", fontSize: "15px", fontWeight: "600", color: COLORS.textBright },
-  statLabel: { fontSize: "9px", fontWeight: "500", color: COLORS.textDim, textTransform: "uppercase", letterSpacing: "1px" },
-  statDivider: { width: "1px", height: "28px", background: COLORS.border },
-};
-
-export default App;

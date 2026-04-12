@@ -19,7 +19,7 @@ def find_liquidity_levels(swings, tolerance=0.015, max_distance=100):
                 "price": avg_price,
                 "type": "equal_highs",
                 "count": len(cluster),
-                "indexes": [s["index"] for s in cluster]
+                "indexes": [s["index"] for s in cluster],
             })
         used.add(i)
 
@@ -30,7 +30,7 @@ def find_liquidity_levels(swings, tolerance=0.015, max_distance=100):
         cluster = [l1]
         for j, l2 in enumerate(lows):
             if j != i and j not in used:
-                if abs(h1["price"] - h2["price"]) <= tolerance and abs(h1["index"] - h2["index"]) <= max_distance:
+                if abs(l1["price"] - l2["price"]) <= tolerance and abs(l1["index"] - l2["index"]) <= max_distance:
                     cluster.append(l2)
                     used.add(j)
         if len(cluster) >= 2:
@@ -39,7 +39,7 @@ def find_liquidity_levels(swings, tolerance=0.015, max_distance=100):
                 "price": avg_price,
                 "type": "equal_lows",
                 "count": len(cluster),
-                "indexes": [s["index"] for s in cluster]
+                "indexes": [s["index"] for s in cluster],
             })
         used.add(i)
 

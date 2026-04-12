@@ -2,7 +2,7 @@ from data.loader import load_candles, resample_candles
 from engine.backtester import run_backtest
 from strategies.categorical_strategy import CategoricalStrategy
 
-candles_1m = load_candles("data/data.csv")
+candles_1m = load_candles("data/gbpjpy_jan.csv")
 candles_5m = resample_candles(candles_1m, period=5)
 
 best_pnl = float("-inf")

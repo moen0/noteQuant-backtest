@@ -45,13 +45,9 @@ for params in tqdm(param_combos, desc="Optimizing ICT Strategy", unit="backtest"
         sweep_lookback=params["sweep_lb"],
     )
 
-    # Accurate timing
     t0 = time.perf_counter()
     trades = run_backtest(candles_5m, strategy, 10000)
     elapsed = time.perf_counter() - t0
-
-    # Optional: print every backtest (can be noisy, comment out if you want cleaner output)
-    # print(f"Backtest took {elapsed:.4f}s | Trades: {len(trades)}")
 
     if len(trades) < 5:
         continue
