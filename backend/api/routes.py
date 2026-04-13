@@ -614,7 +614,6 @@ def get_optimize(req: OptimizeRequest):
     ranking_key = req.rank_objective
 
     def _rank_results(items):
-        # Lower drawdown is better; all other objectives are maximize.
         if ranking_key == "max_drawdown_pct":
             return sorted(items, key=lambda x: x.get(ranking_key, 0))
         return sorted(items, key=lambda x: x.get(ranking_key, 0), reverse=True)
@@ -666,10 +665,8 @@ def get_optimize(req: OptimizeRequest):
     total_generated_combinations = base_count_without_sweep * sweep_factor
 
     if sample_mode == "first":
-        # Stop iteration as soon as we hit the cap (no ghost work on remaining permutations).
         combos = list(islice(_candidate_iter(), req.max_combinations))
     else:
-        # Reservoir sampling keeps an unbiased random sample without storing all combos.
         for generated_idx, candidate in enumerate(_candidate_iter(), start=1):
             if len(combos) < req.max_combinations:
                 if len(combos) < req.max_combinations:
@@ -686,7 +683,6 @@ def get_optimize(req: OptimizeRequest):
         started = time.perf_counter()
         results = []
 
-        # Emit immediately so the UI can move off 0% as soon as the stream opens.
         yield f"data: {json.dumps({'type': 'progress', 'progress': 0, 'processed': 0, 'total_combinations': executed_combinations, 'generated_combinations': total_generated_combinations, 'executed_combinations': executed_combinations, 'max_combinations': req.max_combinations, 'capped_by_max_combinations': capped_by_max_combinations, 'combo_sampling_mode': sample_mode, 'combo_sampling_seed': req.combo_sampling_seed, 'valid_results': 0, 'top_results': []})}\n\n"
 
         for i, params in enumerate(combos):
@@ -924,12 +920,12 @@ def stream_backtest(
     use_fvg: bool = True,
     use_ob: bool = True,
     proximity_pct: float = 0.5,
-    # FVG Quality
+
     min_gap_size: float = 0.0,
     impulse_multiplier: float = 0.0,
     require_unmitigated_fvg: bool = True,
     require_bos_confluence: bool = False,
-    # Order Block
+
     min_ob_size: float = 0.0,
     require_fvg_ob_confluence: bool = False,
     # Liquidity

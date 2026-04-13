@@ -81,7 +81,8 @@ function savePresets(presets) {
 function loadRecentResults() {
   try {
     const parsed = JSON.parse(localStorage.getItem(RESULT_HISTORY_KEY) || '[]');
-    return Array.isArray(parsed) ? parsed.slice(0, 5) : [];
+    return Array.isArray(parsed) ? parsed.slice(0,
+        5) : [];
   } catch {
     return [];
   }

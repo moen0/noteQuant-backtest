@@ -14,6 +14,7 @@ import { EquityCurve } from './components/EquityCurve';
 import { MetricCard } from './components/MetricCard';
 import { PerformanceBreakdown } from './components/PerformanceBreakdown';
 import { TradeDistribution } from './components/TradeDistribution';
+import appLogo from './assets/favicon.png';
 
 const TIMEFRAMES = [
   { label: '1m', value: 1 },
@@ -142,6 +143,17 @@ export default function App() {
   });
 
   useEffect(() => { setMounted(true); }, []);
+
+  useEffect(() => {
+    let link = document.querySelector("link[rel='icon']");
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    link.type = 'image/png';
+    link.href = appLogo;
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -461,12 +473,13 @@ export default function App() {
           animate={mounted ? 'visible' : 'hidden'}
         >
           <div className="flex items-center gap-4">
-            <div className="w-10 h-10 bg-[#fafafa] text-black font-mono font-bold text-[13px] flex items-center justify-center tracking-tight">
-              nQ
-            </div>
+            <img
+              src={appLogo}
+              alt="noteQuant logo"
+              className="w-10 h-10 object-contain border border-[#262626] bg-black p-1"
+            />
             <div>
               <div className="text-[17px] font-semibold tracking-tight">noteQuant</div>
-              <div className="text-[11px] text-[#737373] font-mono uppercase tracking-widest">ICT / SMC Backtester</div>
             </div>
           </div>
           <div className="flex items-center gap-3 flex-wrap">

@@ -1,12 +1,4 @@
 def find_fvgs(candles, min_gap_size=0.0, impulse_multiplier=0.0):
-    """
-    Find Fair Value Gaps in candle data.
-
-    Args:
-        candles: list of Candle objects
-        min_gap_size: minimum gap size in price units to filter noise (0 = no filter)
-        impulse_multiplier: minimum body-to-avg ratio for the middle candle (0 = no filter)
-    """
     fvgs = []
 
     avg_body = 0
@@ -50,7 +42,6 @@ def find_fvgs(candles, min_gap_size=0.0, impulse_multiplier=0.0):
                     "bottom": c3.high,
                     "mitigated": False,
                 })
-
         # Mark mitigated FVGs
         for fvg in fvgs:
             if fvg["mitigated"]:
