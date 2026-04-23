@@ -100,9 +100,6 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
   const [asianSweepOnlyModes, setAsianSweepOnlyModes] = useState('true,false');
   const [useBreakEvenModes, setUseBreakEvenModes] = useState('false,true');
   const [beTriggerRrValues, setBeTriggerRrValues] = useState('1.0,1.5,2.0');
-  const [usePartialTpModes, setUsePartialTpModes] = useState('false,true');
-  const [partialTpRrValues, setPartialTpRrValues] = useState('1.0,1.5,2.0');
-  const [partialTpPercentValues, setPartialTpPercentValues] = useState('50');
 
   const [loading, setLoading] = useState(false);
   const [progressPct, setProgressPct] = useState(0);
@@ -158,9 +155,6 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
     asianSweepOnly: params.asian_sweep_only === true || params.asian_sweep_only === 'true',
     useBreakEven: params.use_break_even === true || params.use_break_even === 'true',
     beTriggerRr: Number(params.be_trigger_rr ?? 1.0),
-    usePartialTp: params.use_partial_tp === true || params.use_partial_tp === 'true',
-    partialTpRr: Number(params.partial_tp_rr ?? 1.0),
-    partialTpPercent: Number(params.partial_tp_percent ?? 50),
     dayFilter: [0, 1, 2, 3, 4],
     maxDailyLoss: 0,
     maxConsecutiveLosses: 0,
@@ -250,9 +244,6 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
         * count(asianSweepOnlyModes)
         * count(useBreakEvenModes)
         * count(beTriggerRrValues)
-        * count(usePartialTpModes)
-        * count(partialTpRrValues)
-        * count(partialTpPercentValues)
         * Math.max(1, sweepFactor || boolCount);
   }, [
     sessions,
@@ -271,9 +262,6 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
     asianSweepOnlyModes,
     useBreakEvenModes,
     beTriggerRrValues,
-    usePartialTpModes,
-    partialTpRrValues,
-    partialTpPercentValues,
   ]);
 
   const mcPnlHistogram = useMemo(() => {
@@ -358,9 +346,6 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
         asian_sweep_only_modes: parseBoolList(asianSweepOnlyModes, [true, false]),
         use_break_even_modes: parseBoolList(useBreakEvenModes, [false, true]),
         be_trigger_rr_values: parseFloatList(beTriggerRrValues, [1.0, 1.5, 2.0]),
-        use_partial_tp_modes: parseBoolList(usePartialTpModes, [false, true]),
-        partial_tp_rr_values: parseFloatList(partialTpRrValues, [1.0, 1.5, 2.0]),
-        partial_tp_percent_values: parseFloatList(partialTpPercentValues, [50]),
       };
       const seedValue = comboSamplingSeed.trim();
       if (seedValue) {
@@ -481,9 +466,6 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
     asianSweepOnlyModes,
     useBreakEvenModes,
     beTriggerRrValues,
-    usePartialTpModes,
-    partialTpRrValues,
-    partialTpPercentValues,
     activateTopResult,
   ]);
 
@@ -523,9 +505,6 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
         asian_sweep_only: String(targetParams.asian_sweep_only ?? false),
         use_break_even: String(targetParams.use_break_even ?? false),
         be_trigger_rr: String(targetParams.be_trigger_rr ?? 1.0),
-        use_partial_tp: String(targetParams.use_partial_tp ?? false),
-        partial_tp_rr: String(targetParams.partial_tp_rr ?? 1.0),
-        partial_tp_percent: String(targetParams.partial_tp_percent ?? 50),
         runs: String(mcRuns),
         shuffle_trades: String(mcShuffleTrades),
         pnl_variation_pct: String(mcVariationPct),
@@ -663,9 +642,6 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
                                           asian_sweep_only: p.asianSweepOnly,
                                           use_break_even: p.useBreakEven,
                                           be_trigger_rr: p.beTriggerRr,
-                                          use_partial_tp: p.usePartialTp,
-                                          partial_tp_rr: p.partialTpRr,
-                                          partial_tp_percent: p.partialTpPercent,
                                         },
                                         timeframe: p.timeframe,
                                         riskReward: p.riskReward,
@@ -790,9 +766,6 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
                 <TextListInput label="Asian Sweep Only" value={asianSweepOnlyModes} onChange={setAsianSweepOnlyModes} placeholder="true,false" />
                 <TextListInput label="Use Break-Even" value={useBreakEvenModes} onChange={setUseBreakEvenModes} placeholder="false,true" />
                 <TextListInput label="BE Trigger RR" value={beTriggerRrValues} onChange={setBeTriggerRrValues} placeholder="1.0,1.5,2.0" />
-                <TextListInput label="Use Partial TP" value={usePartialTpModes} onChange={setUsePartialTpModes} placeholder="false,true" />
-                <TextListInput label="Partial TP RR" value={partialTpRrValues} onChange={setPartialTpRrValues} placeholder="1.0,1.5,2.0" />
-                <TextListInput label="Partial TP %" value={partialTpPercentValues} onChange={setPartialTpPercentValues} placeholder="50" />
               </div>
 
               <div className="mt-6 border border-[#1a1a1a] bg-black/40 p-4">

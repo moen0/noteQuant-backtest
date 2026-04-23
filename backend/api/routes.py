@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-
+from indicators.sessions import set_timezone
 BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
@@ -524,6 +524,10 @@ def get_backtest(
     max_consecutive_losses: int = 0,
 ):
     dataset_id = _resolve_dataset(dataset)
+    if "MT5" in dataset.upper():
+        set_timezone("mt5")
+    else:
+        set_timezone("est")
     candles = _get_candles_for_timeframe(dataset_id, timeframe)
 
     strategy = _build_strategy(

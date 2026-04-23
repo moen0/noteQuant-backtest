@@ -39,6 +39,8 @@ const DAYS = [
 const STARTING_BALANCE = 10000;
 const PRESETS_KEY = 'nq_backtest_presets';
 const RESULT_HISTORY_KEY = 'nq_backtest_recent_results';
+const RESULT_HISTORY_LIMIT = 10;
+const DEFAULT_PRESET_NAME = 'Manual';
 
 function formatMoney(v) {
   return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -81,15 +83,14 @@ function savePresets(presets) {
 function loadRecentResults() {
   try {
     const parsed = JSON.parse(localStorage.getItem(RESULT_HISTORY_KEY) || '[]');
-    return Array.isArray(parsed) ? parsed.slice(0,
-        5) : [];
+    return Array.isArray(parsed) ? parsed.slice(0, RESULT_HISTORY_LIMIT) : [];
   } catch {
     return [];
   }
 }
 
 function saveRecentResults(results) {
-  localStorage.setItem(RESULT_HISTORY_KEY, JSON.stringify(results.slice(0, 5)));
+  localStorage.setItem(RESULT_HISTORY_KEY, JSON.stringify(results.slice(0, RESULT_HISTORY_LIMIT)));
 }
 
 function NumberInput({ label, value, onChange, min, max, step = 1 }) {
@@ -195,6 +196,7 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
   // Presets
   const [presets, setPresets] = useState(loadPresets);
   const [presetName, setPresetName] = useState('');
+  const [activePresetName, setActivePresetName] = useState(DEFAULT_PRESET_NAME);
   const [showPresets, setShowPresets] = useState(false);
   const [recentResults, setRecentResults] = useState(loadRecentResults);
 
@@ -243,12 +245,16 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
     const updated = { ...presets, [name]: getSettings() };
     setPresets(updated);
     savePresets(updated);
+    setActivePresetName(name);
     setPresetName('');
   };
 
   const handleLoadPreset = (name) => {
     const preset = presets[name];
-    if (preset) applySettings(preset);
+    if (preset) {
+      applySettings(preset);
+      setActivePresetName(name);
+    }
     setShowPresets(false);
   };
 
@@ -257,6 +263,41 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
     delete updated[name];
     setPresets(updated);
     savePresets(updated);
+    if (activePresetName === name) {
+      setActivePresetName(DEFAULT_PRESET_NAME);
+    }
+  };
+
+  const exportRunParameters = (run) => {
+    const exportPayload = {
+      exportedAt: new Date().toISOString(),
+      runId: run.id,
+      presetName: run.presetName || DEFAULT_PRESET_NAME,
+      parameters: run.settings || {
+        timeframe: run.timeframe,
+        riskReward: run.riskReward,
+      },
+      queryParameters: run.queryParameters || null,
+      summary: {
+        dataset: run.dataset,
+        timeframe: run.timeframe,
+        riskReward: run.riskReward,
+        totalPnl: run.totalPnl,
+        winRate: run.winRate,
+        totalTrades: run.totalTrades,
+      },
+    };
+
+    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    const safePreset = (run.presetName || DEFAULT_PRESET_NAME).replace(/[^a-z0-9_-]/gi, '_');
+    anchor.href = url;
+    anchor.download = `backtest-params-${run.dataset || 'dataset'}-${safePreset}-${run.id}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
   };
 
   const toggleDay = (day) => {
@@ -426,18 +467,25 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
       onBacktestComplete?.(backtestData);
 
       if (backtestData?.stats) {
+        const snapshotSettings = {
+          ...getSettings(),
+          dayFilter: [...dayFilter],
+        };
         const snapshot = {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           runAt: new Date().toISOString(),
           dataset: selectedDataset,
+          presetName: activePresetName,
           timeframe,
           riskReward,
+          settings: snapshotSettings,
+          queryParameters: Object.fromEntries(params.entries()),
           totalPnl: Number(backtestData.stats.total_pnl ?? 0),
           winRate: Number(backtestData.stats.win_rate ?? 0),
           totalTrades: Number(backtestData.stats.total_trades ?? 0),
         };
         setRecentResults((prev) => {
-          const next = [snapshot, ...prev].slice(0, 5);
+          const next = [snapshot, ...prev].slice(0, RESULT_HISTORY_LIMIT);
           saveRecentResults(next);
           return next;
         });
@@ -463,7 +511,7 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
     requireFvgObConfluence, asianSweepOnly, dayFilter,
     useBreakEven, beTriggerRr,
     usePartialTp, partialTpRr, partialTpPercent,
-    maxDailyLoss, maxConsecutiveLosses, onBacktestComplete,
+    maxDailyLoss, maxConsecutiveLosses, onBacktestComplete, activePresetName,
   ]);
 
   const runMonteCarlo = useCallback(async () => {
@@ -796,22 +844,30 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
                 <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-1">Results</p>
                 <h2 className="text-[20px] font-semibold tracking-tight">Backtest Summary</h2>
                 <p className="text-[12px] text-[#737373] font-mono mt-2">CSV: {selectedDataset}</p>
+                <p className="text-[12px] text-[#737373] font-mono mt-1">Preset: {activePresetName}</p>
               </div>
 
               <div className="mb-6 border border-[#1a1a1a] bg-black/30 p-4">
-                <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-3">Last 5 Runs</p>
+                <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-3">Last {RESULT_HISTORY_LIMIT} Runs</p>
                 {recentResults.length === 0 ? (
                   <p className="text-[12px] text-[#737373] font-mono">No previous runs saved yet.</p>
                 ) : (
                   <div className="space-y-2">
                     {recentResults.map((run) => (
-                      <div key={run.id} className="grid grid-cols-2 md:grid-cols-6 gap-2 text-[12px] font-mono border border-[#1a1a1a] bg-black/40 px-3 py-2">
+                      <div key={run.id} className="grid grid-cols-2 md:grid-cols-8 gap-2 text-[12px] font-mono border border-[#1a1a1a] bg-black/40 px-3 py-2 items-center">
                         <span className="text-[#a3a3a3]">{new Date(run.runAt).toLocaleString()}</span>
-                        <span className="text-[#fafafa]">{run.dataset}</span>
-                        <span className="text-[#a3a3a3]">{run.timeframe}m</span>
-                        <span className={run.totalPnl >= 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}>${formatMoney(run.totalPnl)}</span>
-                        <span className="text-[#60a5fa]">{run.winRate.toFixed(1)}%</span>
-                        <span className="text-[#fafafa]">{run.totalTrades} trades</span>
+                        <span className="text-[#fafafa]">{run.dataset || 'Unknown CSV'}</span>
+                        <span className="text-[#a3a3a3]">{run.timeframe ?? '-'}m</span>
+                        <span className="text-[#a78bfa]">{run.presetName || DEFAULT_PRESET_NAME}</span>
+                        <span className={(run.totalPnl ?? 0) >= 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}>${formatMoney(Number(run.totalPnl ?? 0))}</span>
+                        <span className="text-[#60a5fa]">{Number(run.winRate ?? 0).toFixed(1)}%</span>
+                        <span className="text-[#fafafa]">{Number(run.totalTrades ?? 0)} trades</span>
+                        <button
+                          onClick={() => exportRunParameters(run)}
+                          className="px-2 py-1 text-[11px] border border-[#262626] text-[#d4d4d8] hover:text-[#fafafa] hover:border-[#404040] transition-colors"
+                        >
+                          Export
+                        </button>
                       </div>
                     ))}
                   </div>
