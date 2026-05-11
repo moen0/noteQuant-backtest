@@ -21,7 +21,7 @@ function CustomTooltip({ active, payload, total }) {
   return null;
 }
 
-export function TradeDistribution({ wins = 0, losses = 0, avgWin = 0, avgLoss = 0, largestWin = 0, largestLoss = 0 }) {
+export function TradeDistribution({ wins = 0, losses = 0, avgWin = 0, avgLoss = 0 }) {
   const total = wins + losses;
   const data = [
     { name: 'Wins', value: wins },

@@ -8,7 +8,7 @@ import {
 import { BacktestingTab } from './components/BacktestingTab';
 import { OptimizerTab } from './components/OptimizerTab';
 import { TradeHistory } from './components/TradeHistory';
-import { motion } from 'motion/react';
+import { motion as Motion } from 'motion/react';
 
 import { EquityCurve } from './components/EquityCurve';
 import { MetricCard } from './components/MetricCard';
@@ -115,6 +115,7 @@ export default function App() {
   const candleSeriesRef = useRef(null);
   const equitySeriesRef = useRef(null);
   const markersRef = useRef(null);
+  const abortControllerRef = useRef(null);
 
   const [mounted, setMounted] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -194,9 +195,18 @@ export default function App() {
   const loadData = useCallback(async () => {
     const shouldLoadDashboardData = ['dashboard', 'forex-stats', 'trade-history'].includes(activeTab);
     if (!shouldLoadDashboardData) {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
       setLoading(false);
       return;
     }
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     setLoading(true);
     try {
@@ -204,20 +214,22 @@ export default function App() {
       const shouldFetchBacktest = shouldLoadBacktest && !hasSharedBacktest;
       const datasetQuery = `dataset=${encodeURIComponent(selectedDataset)}`;
       const fetches = [
-        fetch(`http://localhost:8000/api/candles?timeframe=${timeframe}&${datasetQuery}`),
-        fetch(`http://localhost:8000/api/indicators?timeframe=${timeframe}&${datasetQuery}`),
+        fetch(`http://localhost:8000/api/candles?timeframe=${timeframe}&${datasetQuery}`, { signal: controller.signal }),
+        fetch(`http://localhost:8000/api/indicators?timeframe=${timeframe}&${datasetQuery}`, { signal: controller.signal }),
       ];
       if (shouldFetchBacktest) {
-        fetches.push(fetch(`http://localhost:8000/api/backtest?timeframe=${timeframe}&rr=${riskReward}&lookback=${stratParams.lookback}&ob_age=${stratParams.obAge}&atr_mult=${stratParams.atrMult}&sweep=${stratParams.sweep}&sweep_lookback=${stratParams.sweepLookback}&session=${stratParams.session}&${datasetQuery}`));
+        fetches.push(fetch(`http://localhost:8000/api/backtest?timeframe=${timeframe}&rr=${riskReward}&lookback=${stratParams.lookback}&ob_age=${stratParams.obAge}&atr_mult=${stratParams.atrMult}&sweep=${stratParams.sweep}&sweep_lookback=${stratParams.sweepLookback}&session=${stratParams.session}&${datasetQuery}`, { signal: controller.signal }));
       }
 
       const responses = await Promise.all(fetches);
+      if (controller.signal.aborted) return;
       const candleData = await responses[0].json();
       const indicatorData = await responses[1].json();
       const backtestPayload = shouldFetchBacktest
         ? await responses[2].json()
         : (shouldLoadBacktest ? backtestData : null);
 
+      if (controller.signal.aborted) return;
       const candles = candleData.candles.map((candle) => ({
         time: Math.floor(new Date(candle.time).getTime() / 1000),
         open: candle.open,
@@ -331,9 +343,12 @@ export default function App() {
         setBacktestData(backtestPayload);
       }
     } catch (error) {
+      if (error?.name === 'AbortError') return;
       console.error('Failed to load data:', error);
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) {
+        setLoading(false);
+      }
     }
   }, [activeTab, backtestData, hasSharedBacktest, indicators, riskReward, selectedDataset, showBacktest, timeframe]);
 
@@ -419,8 +434,18 @@ export default function App() {
   const backtestStats = backtestData?.stats ?? null;
   const equityCurve = useMemo(() => buildEquityCurve(backtestTrades), [backtestTrades]);
   const monthlyReturns = useMemo(() => buildMonthlyReturns(backtestTrades), [backtestTrades]);
-  const maxDrawdown = useMemo(() => calculateMaxDrawdown(equityCurve), [equityCurve]);
-  const sharpeRatio = useMemo(() => calculateSharpeRatio(backtestTrades), [backtestTrades]);
+  const maxDrawdown = useMemo(() => {
+    if (backtestStats?.max_drawdown_pct != null) {
+      return -Math.abs(backtestStats.max_drawdown_pct);
+    }
+    return calculateMaxDrawdown(equityCurve);
+  }, [backtestStats, equityCurve]);
+  const sharpeRatio = useMemo(() => {
+    if (backtestStats?.sharpe_ratio != null) {
+      return backtestStats.sharpe_ratio;
+    }
+    return calculateSharpeRatio(backtestTrades);
+  }, [backtestStats, backtestTrades]);
   const largestWin = useMemo(() => backtestTrades.reduce((best, t) => Math.max(best, t.pnl), 0), [backtestTrades]);
   const largestLoss = useMemo(() => backtestTrades.reduce((worst, t) => Math.min(worst, t.pnl), 0), [backtestTrades]);
   const grossProfit = backtestStats ? backtestStats.winners * backtestStats.avg_win : 0;
@@ -466,7 +491,7 @@ export default function App() {
       <div className="max-w-[1440px] mx-auto px-6 py-8">
 
         {/* Header */}
-        <motion.header
+        <Motion.header
           className="flex justify-between items-center gap-4 mb-8 flex-wrap"
           variants={itemVariants}
           initial="hidden"
@@ -495,7 +520,7 @@ export default function App() {
               <div className="w-2 h-2 bg-[#10b981] animate-pulse" />
             )}
           </div>
-        </motion.header>
+        </Motion.header>
 
         {/* Tabs */}
         <div className="flex gap-2 mb-8 border-b border-[#262626] pb-4">
@@ -521,7 +546,7 @@ export default function App() {
         </div>
 
         {/* Dashboard Tab */}
-        <motion.div
+        <Motion.div
           className="space-y-6"
           variants={containerVariants}
           initial="hidden"
@@ -529,7 +554,7 @@ export default function App() {
           style={{ display: activeTab === 'dashboard' ? 'block' : 'none' }}
         >
           {/* Toolbar */}
-          <motion.div variants={itemVariants} className="p-5 border border-[#262626] bg-[#0a0a0a]">
+          <Motion.div variants={itemVariants} className="p-5 border border-[#262626] bg-[#0a0a0a]">
             <div className="flex flex-wrap gap-6 items-center">
               <div className="flex items-center gap-3">
                 <span className="text-[11px] text-[#737373] font-mono uppercase tracking-widest">Timeframe</span>
@@ -606,31 +631,31 @@ export default function App() {
                 </div>
               </div>
             </div>
-          </motion.div>
+          </Motion.div>
 
           {/* Candlestick Chart */}
-          <motion.section variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
+          <Motion.section variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
             <div className="mb-4">
               <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest mb-1">Market Chart</p>
               <h2 className="text-[20px] font-semibold tracking-tight">Candles with structure and trade markers</h2>
             </div>
             <div ref={chartContainerRef} className="h-[480px] border border-[#1a1a1a] overflow-hidden" />
-          </motion.section>
+          </Motion.section>
 
           {/* Equity Line (lightweight-charts) */}
           {showBacktest && (
-            <motion.section variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
+            <Motion.section variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
               <div className="mb-4">
                 <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest mb-1">Equity Curve</p>
                 <h2 className="text-[20px] font-semibold tracking-tight">Strategy balance progression</h2>
               </div>
               <div ref={equityChartRef} className="h-[180px] border border-[#1a1a1a] overflow-hidden" />
-            </motion.section>
+            </Motion.section>
           )}
-        </motion.div>
+        </Motion.div>
 
         {/* Stats Tab */}
-        <motion.div
+        <Motion.div
           className="space-y-6"
           variants={containerVariants}
           initial="hidden"
@@ -638,7 +663,7 @@ export default function App() {
           style={{ display: activeTab === 'forex-stats' ? 'block' : 'none' }}
         >
           {/* Hero */}
-          <motion.section variants={itemVariants} className="grid grid-cols-1 lg:grid-cols-[1.7fr_0.9fr] gap-6 p-8 border border-[#262626] bg-[#0a0a0a]">
+          <Motion.section variants={itemVariants} className="grid grid-cols-1 lg:grid-cols-[1.7fr_0.9fr] gap-6 p-8 border border-[#262626] bg-[#0a0a0a]">
             <div className="flex flex-col gap-4">
               <div className="flex gap-3 flex-wrap text-[13px] font-mono">
               </div>
@@ -656,10 +681,10 @@ export default function App() {
               </select>
               <p className="text-[11px] text-[#525252] font-mono">Switch CSVs here to refresh all metrics and charts.</p>
             </div>
-          </motion.section>
+          </Motion.section>
           
           {/* Metrics Grid */}
-          <motion.section variants={itemVariants} className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+          <Motion.section variants={itemVariants} className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             {overviewMetrics.map((metric) => (
               <MetricCard
                 key={metric.label}
@@ -671,15 +696,15 @@ export default function App() {
                 neutral={metric.neutral}
               />
             ))}
-          </motion.section>
+          </Motion.section>
 
           {/* Equity Curve (recharts) */}
-          <motion.section variants={itemVariants}>
+          <Motion.section variants={itemVariants}>
             <EquityCurve data={equityCurve} startingBalance={STARTING_BALANCE} />
-          </motion.section>
+          </Motion.section>
 
           {/* Distribution + Breakdown */}
-          <motion.div variants={itemVariants} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Motion.div variants={itemVariants} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <TradeDistribution
               wins={backtestStats?.winners ?? 0}
               losses={backtestStats?.losers ?? 0}
@@ -695,25 +720,25 @@ export default function App() {
               maxDrawdown={maxDrawdown}
               sharpeRatio={sharpeRatio}
             />
-          </motion.div>
-        </motion.div>
+          </Motion.div>
+        </Motion.div>
 
         {/* Trade History Tab */}
-        <motion.div
+        <Motion.div
           className="space-y-6"
           variants={containerVariants}
           initial="hidden"
           animate={mounted ? 'visible' : 'hidden'}
           style={{ display: activeTab === 'trade-history' ? 'block' : 'none' }}
         >
-          <motion.section variants={itemVariants}>
+          <Motion.section variants={itemVariants}>
             <TradeHistory trades={backtestTrades} />
-          </motion.section>
-        </motion.div>
+          </Motion.section>
+        </Motion.div>
 
         {/* Backtesting Tab */}
         {activeTab === 'backtesting' && (
-            <motion.div
+            <Motion.div
                 variants={containerVariants}
                 initial="hidden"
                 animate={mounted ? 'visible' : 'hidden'}
@@ -724,11 +749,11 @@ export default function App() {
                   onDatasetChange={setSelectedDataset}
                   onBacktestComplete={handleBacktestComplete}
               />
-            </motion.div>
+            </Motion.div>
         )}
 
         {activeTab === 'optimizer' && (
-          <motion.div
+          <Motion.div
             variants={containerVariants}
             initial="hidden"
             animate={mounted ? 'visible' : 'hidden'}
@@ -738,7 +763,7 @@ export default function App() {
               selectedDataset={selectedDataset}
               onDatasetChange={setSelectedDataset}
             />
-          </motion.div>
+          </Motion.div>
         )}
       </div>
     </div>

@@ -28,3 +28,5 @@ class Trade:
     exit_price: float
     pnl: float
     r_multiple: float = 0.0
+    partial_tp_taken: bool = False
+    partial_tp_realized_pnl: float = 0.0

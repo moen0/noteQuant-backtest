@@ -3,7 +3,7 @@ from indicators.market_structure import find_swing_points, detect_structure
 from indicators.liquidity import find_liquidity_levels
 from indicators.fvg import find_fvgs
 from indicators.order_blocks import find_order_blocks
-from indicators.sessions import in_session, in_day_filter, get_asian_range
+from indicators.sessions import in_session, in_day_filter, get_asian_range, get_sessions_for_tz
 from collections import defaultdict
 
 
@@ -33,6 +33,7 @@ class ICTStrategy:
             use_partial_tp=False,
             partial_tp_rr=1.0,
             partial_tp_percent=50.0,
+            timezone="est",
     ):
         self.lookback = lookback
         self.atr_mult = atr_mult
@@ -58,6 +59,7 @@ class ICTStrategy:
         self.use_partial_tp = use_partial_tp
         self.partial_tp_rr = partial_tp_rr
         self.partial_tp_percent = partial_tp_percent
+        self.sessions_map = get_sessions_for_tz(timezone)
 
         self.swings = []
         self.structure = []
@@ -88,7 +90,7 @@ class ICTStrategy:
         for c in candles:
             daily[c.time_open.date()].append(c)
         for date, day_candles in daily.items():
-            ar = get_asian_range(day_candles)
+            ar = get_asian_range(day_candles, sessions_map=self.sessions_map)
             if ar:
                 self.asian_ranges[date] = ar
 
@@ -204,7 +206,7 @@ class ICTStrategy:
 
         candle = candles[index]
 
-        if not in_session(candle.time_open, self.session):
+        if not in_session(candle.time_open, self.session, sessions_map=self.sessions_map):
             self.recent_sweep = None
             return None
 

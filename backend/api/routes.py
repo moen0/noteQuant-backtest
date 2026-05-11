@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from indicators.sessions import set_timezone
+
 BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
@@ -141,13 +141,29 @@ def _get_candles_for_timeframe(dataset_id, timeframe):
 
 
 def _build_strategy(
-    session, lookback, ob_age, atr_mult, use_fvg, use_ob,
-    proximity_pct, sweep, sweep_lookback,
-    min_gap_size, impulse_multiplier, require_unmitigated_fvg,
-    require_bos_confluence, min_ob_size, require_fvg_ob_confluence,
-    asian_sweep_only, day_filter,
-    use_break_even=False, be_trigger_rr=1.0,
-    use_partial_tp=False, partial_tp_rr=1.0, partial_tp_percent=50.0,
+    session="new_york",
+    lookback=5,
+    ob_age=50,
+    atr_mult=1.5,
+    use_fvg=True,
+    use_ob=True,
+    proximity_pct=0.3,
+    sweep=True,
+    sweep_lookback=10,
+    min_gap_size=0.0,
+    impulse_multiplier=0.0,
+    require_unmitigated_fvg=True,
+    require_bos_confluence=False,
+    min_ob_size=0.0,
+    require_fvg_ob_confluence=False,
+    asian_sweep_only=False,
+    day_filter=None,
+    use_break_even=False,
+    be_trigger_rr=1.0,
+    use_partial_tp=False,
+    partial_tp_rr=1.0,
+    partial_tp_percent=50.0,
+    timezone="est",
 ):
     return ICTStrategy(
         session=session,
@@ -172,6 +188,7 @@ def _build_strategy(
         use_partial_tp=use_partial_tp,
         partial_tp_rr=partial_tp_rr,
         partial_tp_percent=partial_tp_percent,
+        timezone=timezone,
     )
 
 
@@ -189,12 +206,28 @@ def _trade_payload(trade):
     }
 
 
-def _stats_payload(trades, rr):
+def _stats_payload(trades, rr, starting_balance=10000.0):
     total_pnl = sum(t.pnl for t in trades)
     winners = [t for t in trades if t.pnl > 0]
     losers = [t for t in trades if t.pnl <= 0]
     partial_tp_trades = [t for t in trades if getattr(t, "partial_tp_taken", False)]
     partial_tp_realized_total = sum(float(getattr(t, "partial_tp_realized_pnl", 0.0) or 0.0) for t in partial_tp_trades)
+    pnls = [t.pnl for t in trades]
+    returns = [(p / starting_balance) for p in pnls] if starting_balance > 0 else []
+    mean_return = (sum(returns) / len(returns)) if returns else 0.0
+    variance = (sum((r - mean_return) ** 2 for r in returns) / len(returns)) if returns else 0.0
+    std_dev = variance ** 0.5
+    sharpe_ratio = ((mean_return / std_dev) * (len(returns) ** 0.5)) if std_dev > 0 else 0.0
+
+    equity_points = _build_equity_points(trades, starting_balance=starting_balance)
+    peak = equity_points[0] if equity_points else starting_balance
+    max_drawdown_pct = 0.0
+    for value in equity_points:
+        if value > peak:
+            peak = value
+        drawdown_pct = ((peak - value) / peak) * 100 if peak > 0 else 0.0
+        if drawdown_pct > max_drawdown_pct:
+            max_drawdown_pct = drawdown_pct
     return {
         "total_trades": len(trades),
         "winners": len(winners),
@@ -208,6 +241,8 @@ def _stats_payload(trades, rr):
         "partial_tp_rate": (len(partial_tp_trades) / len(trades) * 100) if trades else 0,
         "partial_tp_realized_total": partial_tp_realized_total,
         "partial_tp_realized_avg": (partial_tp_realized_total / len(partial_tp_trades)) if partial_tp_trades else 0,
+        "sharpe_ratio": round(sharpe_ratio, 6),
+        "max_drawdown_pct": round(max_drawdown_pct, 6),
     }
 
 
@@ -310,7 +345,7 @@ def _risk_metrics(trades, starting_balance=10000.0):
     sortino = (mean_pnl / downside_dev) * (trade_count ** 0.5) if downside_dev > 0 else 0.0
 
     equity_points = _build_equity_points(trades, starting_balance=starting_balance)
-    peak = equity_points[0]
+    peak = equity_points[0] if equity_points else starting_balance
     max_drawdown_pct = 0.0
     for value in equity_points:
         if value > peak:
@@ -319,8 +354,9 @@ def _risk_metrics(trades, starting_balance=10000.0):
         if drawdown_pct > max_drawdown_pct:
             max_drawdown_pct = drawdown_pct
 
-    calmar = (net_pnl / max_drawdown_pct) if max_drawdown_pct > 0 else 0.0
-    recovery = (net_pnl / max_drawdown_pct) if max_drawdown_pct > 0 else 0.0
+    calmar = ((net_pnl / starting_balance) * 100 / max_drawdown_pct) if max_drawdown_pct > 0 else 0.0
+    drawdown_amount = starting_balance * (max_drawdown_pct / 100) if max_drawdown_pct > 0 else 0.0
+    recovery = (net_pnl / drawdown_amount) if drawdown_amount > 0 else 0.0
 
     if trade_count < 80:
         trade_score = max(0.0, trade_count / 80)
@@ -524,24 +560,22 @@ def get_backtest(
     max_consecutive_losses: int = 0,
 ):
     dataset_id = _resolve_dataset(dataset)
-    if "MT5" in dataset.upper():
-        set_timezone("mt5")
-    else:
-        set_timezone("est")
+    timezone = "mt5" if "MT5" in dataset.upper() else "est"
     candles = _get_candles_for_timeframe(dataset_id, timeframe)
 
     strategy = _build_strategy(
-        session=session, lookback=lookback, ob_age=ob_age, atr_mult=atr_mult,
-        use_fvg=use_fvg, use_ob=use_ob, proximity_pct=proximity_pct,
-        sweep=sweep, sweep_lookback=sweep_lookback,
-        min_gap_size=min_gap_size, impulse_multiplier=impulse_multiplier,
-        require_unmitigated_fvg=require_unmitigated_fvg,
-        require_bos_confluence=require_bos_confluence,
-        min_ob_size=min_ob_size, require_fvg_ob_confluence=require_fvg_ob_confluence,
-        asian_sweep_only=asian_sweep_only, day_filter=day_filter,
-        use_break_even=use_break_even, be_trigger_rr=be_trigger_rr,
-        use_partial_tp=use_partial_tp, partial_tp_rr=partial_tp_rr, partial_tp_percent=partial_tp_percent,
-    )
+         session=session, lookback=lookback, ob_age=ob_age, atr_mult=atr_mult,
+         use_fvg=use_fvg, use_ob=use_ob, proximity_pct=proximity_pct,
+         sweep=sweep, sweep_lookback=sweep_lookback,
+         min_gap_size=min_gap_size, impulse_multiplier=impulse_multiplier,
+         require_unmitigated_fvg=require_unmitigated_fvg,
+         require_bos_confluence=require_bos_confluence,
+         min_ob_size=min_ob_size, require_fvg_ob_confluence=require_fvg_ob_confluence,
+         asian_sweep_only=asian_sweep_only, day_filter=day_filter,
+         use_break_even=use_break_even, be_trigger_rr=be_trigger_rr,
+         use_partial_tp=use_partial_tp, partial_tp_rr=partial_tp_rr, partial_tp_percent=partial_tp_percent,
+        timezone=timezone,
+     )
     trades = run_backtest(
         candles, strategy, 10000, risk_reward=rr,
         max_daily_loss=max_daily_loss,
@@ -551,7 +585,7 @@ def get_backtest(
     return {
         "trades": [_trade_payload(t) for t in trades],
         "candle_times": [c.time_open.isoformat() for c in candles],
-        "stats": _stats_payload(trades, rr),
+        "stats": _stats_payload(trades, rr, starting_balance=10000.0),
     }
 
 
@@ -585,6 +619,7 @@ def backtest_monte_carlo(req: MonteCarloRequest):
 @app.post("/api/optimize")
 def get_optimize(req: OptimizeRequest):
     dataset_id = _resolve_dataset(req.dataset)
+    timezone = "mt5" if "MT5" in dataset_id.upper() else "est"
     candles = _get_candles_for_timeframe(dataset_id, req.timeframe)
 
     session_list = req.sessions
@@ -709,6 +744,7 @@ def get_optimize(req: OptimizeRequest):
                 use_partial_tp=params["use_partial_tp"],
                 partial_tp_rr=params["partial_tp_rr"],
                 partial_tp_percent=params["partial_tp_percent"],
+                timezone=timezone,
             )
             trades = run_backtest(candles, strategy, 10000, risk_reward=params["rr"])
 
@@ -815,6 +851,7 @@ def get_optimize_monte_carlo(
     ruin_drawdown_pct: float = Query(default=20.0, ge=0.0, le=100.0),
 ):
     dataset_id = _resolve_dataset(dataset)
+    timezone = "mt5" if "MT5" in dataset_id.upper() else "est"
     candles = _get_candles_for_timeframe(dataset_id, timeframe)
 
     strategy = _build_strategy(
@@ -840,6 +877,7 @@ def get_optimize_monte_carlo(
         partial_tp_rr=partial_tp_rr,
         partial_tp_percent=partial_tp_percent,
         day_filter=None,
+        timezone=timezone,
     )
     trades = run_backtest(candles, strategy, 10000, risk_reward=rr)
     trade_r_multiples = [getattr(t, "r_multiple", 0.0) for t in trades]
@@ -948,20 +986,22 @@ def stream_backtest(
     max_consecutive_losses: int = 0,
 ):
     dataset_id = _resolve_dataset(dataset)
+    timezone = "mt5" if "MT5" in dataset_id.upper() else "est"
     candles = _get_candles_for_timeframe(dataset_id, timeframe)
 
     strategy = _build_strategy(
-        session=session, lookback=lookback, ob_age=ob_age, atr_mult=atr_mult,
-        use_fvg=use_fvg, use_ob=use_ob, proximity_pct=proximity_pct,
-        sweep=sweep, sweep_lookback=sweep_lookback,
-        min_gap_size=min_gap_size, impulse_multiplier=impulse_multiplier,
-        require_unmitigated_fvg=require_unmitigated_fvg,
-        require_bos_confluence=require_bos_confluence,
-        min_ob_size=min_ob_size, require_fvg_ob_confluence=require_fvg_ob_confluence,
-        asian_sweep_only=asian_sweep_only, day_filter=day_filter,
-        use_break_even=use_break_even, be_trigger_rr=be_trigger_rr,
-        use_partial_tp=use_partial_tp, partial_tp_rr=partial_tp_rr, partial_tp_percent=partial_tp_percent,
-    )
+         session=session, lookback=lookback, ob_age=ob_age, atr_mult=atr_mult,
+         use_fvg=use_fvg, use_ob=use_ob, proximity_pct=proximity_pct,
+         sweep=sweep, sweep_lookback=sweep_lookback,
+         min_gap_size=min_gap_size, impulse_multiplier=impulse_multiplier,
+         require_unmitigated_fvg=require_unmitigated_fvg,
+         require_bos_confluence=require_bos_confluence,
+         min_ob_size=min_ob_size, require_fvg_ob_confluence=require_fvg_ob_confluence,
+         asian_sweep_only=asian_sweep_only, day_filter=day_filter,
+         use_break_even=use_break_even, be_trigger_rr=be_trigger_rr,
+         use_partial_tp=use_partial_tp, partial_tp_rr=partial_tp_rr, partial_tp_percent=partial_tp_percent,
+          timezone=timezone,
+     )
 
     def _sse(data):
         return f"data: {json.dumps(data)}\n\n"
@@ -993,7 +1033,7 @@ def stream_backtest(
                     yield _sse({
                         "type": "trade",
                         "trade": _trade_payload(trade),
-                        "stats": _stats_payload(streamed_trades, rr),
+                        "stats": _stats_payload(streamed_trades, rr, starting_balance=10000.0),
                         "processed_candles": event["processed_candles"],
                         "total_candles": event["total_candles"],
                     })
@@ -1002,7 +1042,7 @@ def stream_backtest(
                     yield _sse({
                         "type": "done",
                         "trades": [_trade_payload(t) for t in streamed_trades],
-                        "stats": _stats_payload(streamed_trades, rr),
+                        "stats": _stats_payload(streamed_trades, rr, starting_balance=10000.0),
                         "duration_ms": round(duration_ms, 1),
                         "candle_times": [c.time_open.isoformat() for c in candles],
                     })

@@ -1,48 +1,24 @@
-import { motion, useInView } from 'motion/react';
-import { useEffect, useRef, useState } from 'react';
+import { motion as Motion } from 'motion/react';
+import { useMemo } from 'react';
 
 export function MetricCard({ label, value, change, isPositive, isPrimary = false, neutral = false }) {
-  const ref = useRef(null);
-  const isInView = useInView(ref, { once: true, amount: 0.3 });
-  const [displayValue, setDisplayValue] = useState('0');
-
-  useEffect(() => {
-    if (!isInView) return;
-
+  const displayValue = useMemo(() => {
     const numericValue = parseFloat(value.replace(/[^0-9.-]/g, ''));
-    if (isNaN(numericValue)) {
-      setDisplayValue(value);
-      return;
+    if (isNaN(numericValue)) return value;
+    if (value.includes('$')) {
+      return `$${numericValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     }
-
-    const duration = 1200;
-    const startTime = Date.now();
-
-    const animate = () => {
-      const progress = Math.min((Date.now() - startTime) / duration, 1);
-      const eased = 1 - Math.pow(1 - progress, 3);
-      const current = numericValue * eased;
-
-      if (value.includes('$')) {
-        setDisplayValue(`$${current.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
-      } else if (value.includes('%')) {
-        setDisplayValue(`${current.toFixed(1)}%`);
-      } else {
-        setDisplayValue(current % 1 === 0 ? Math.round(current).toString() : current.toFixed(2));
-      }
-
-      if (progress < 1) requestAnimationFrame(animate);
-    };
-
-    animate();
-  }, [isInView, value]);
+    if (value.includes('%')) {
+      return `${numericValue.toFixed(1)}%`;
+    }
+    return numericValue % 1 === 0 ? Math.round(numericValue).toString() : numericValue.toFixed(2);
+  }, [value]);
 
   const color = neutral ? 'text-[#fafafa]' : isPositive ? 'text-[#10b981]' : 'text-[#ef4444]';
   const changeLabel = typeof change === 'number' ? `${change >= 0 ? '+' : ''}${change.toFixed(1)}%` : change;
 
   return (
-    <motion.div
-      ref={ref}
+    <Motion.div
       className={isPrimary ? 'col-span-2 md:col-span-1' : ''}
       whileHover={{ scale: 1.02 }}
       transition={{ duration: 0.2 }}
@@ -76,6 +52,6 @@ export function MetricCard({ label, value, change, isPositive, isPrimary = false
           )}
         </div>
       </div>
-    </motion.div>
+    </Motion.div>
   );
 }

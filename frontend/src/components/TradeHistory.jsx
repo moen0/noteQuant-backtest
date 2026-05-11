@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { motion } from 'motion/react';
+import { motion as Motion } from 'motion/react';
 
 function formatCurrency(value) {
     const abs = Math.abs(value);
@@ -104,7 +104,6 @@ export function TradeHistory({ trades = [] }) {
                         pageSlice.map((trade, index) => {
                             const globalIndex = (safeCurrentPage - 1) * ROWS_PER_PAGE + index;
                             const isWin = trade.pnl > 0;
-                            const enterDate = new Date(trade.enter_time);
                             const exitDate = new Date(trade.exit_time);
                             const dateStr = exitDate.toLocaleDateString('en-CA');
                             const timeStr = exitDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -112,7 +111,7 @@ export function TradeHistory({ trades = [] }) {
                             const direction = trade.direction === 'long' ? 'BUY' : 'SELL';
 
                             return (
-                                <motion.tr
+                                <Motion.tr
                                     key={`${trade.enter_time}-${index}`}
                                     className="border-b border-[#1a1a1a] hover:bg-[#111111] transition-colors"
                                     initial={{ opacity: 0 }}
@@ -142,7 +141,7 @@ export function TradeHistory({ trades = [] }) {
                         Closed
                       </span>
                                     </td>
-                                </motion.tr>
+                                </Motion.tr>
                             );
                         })
                     )}

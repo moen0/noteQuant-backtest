@@ -1,4 +1,3 @@
-print("File is running")
 import pandas as pd
 from data.model import Candle
 

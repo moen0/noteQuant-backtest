@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { motion } from 'motion/react';
+import { motion as Motion } from 'motion/react';
 import {
   CandlestickSeries,
   LineSeries,
@@ -618,7 +618,7 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
 
   return (
       <div className="space-y-6">
-        <motion.div variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
+        <Motion.div variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
           {/* Header row */}
           <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
             <div>
@@ -817,29 +817,29 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
             <ToggleInput label="Use Break-Even" value={useBreakEven} onChange={setUseBreakEven} />
             <ToggleInput label="Use Partial TP" value={usePartialTp} onChange={setUsePartialTp} />
           </div>
-        </motion.div>
+        </Motion.div>
 
         {/* Chart */}
-        <motion.div variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
+        <Motion.div variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
           <div className="mb-4">
             <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-1">Backtest Chart</p>
             <h2 className="text-[20px] font-semibold tracking-tight">Trade entries and exits</h2>
           </div>
           <div ref={chartContainerRef} className="h-[420px] border border-[#1a1a1a] overflow-hidden" />
-        </motion.div>
+        </Motion.div>
 
         {/* Equity */}
-        <motion.div variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
+        <Motion.div variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
           <div className="mb-4">
             <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-1">Equity Curve</p>
             <h2 className="text-[20px] font-semibold tracking-tight">Balance progression</h2>
           </div>
           <div ref={equityChartRef} className="h-[160px] border border-[#1a1a1a] overflow-hidden" />
-        </motion.div>
+        </Motion.div>
 
         {/* Results */}
         {stats && (
-            <motion.div variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
+            <Motion.div variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
               <div className="mb-6">
                 <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-1">Results</p>
                 <h2 className="text-[20px] font-semibold tracking-tight">Backtest Summary</h2>
@@ -992,8 +992,10 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
                   <p className={`text-[24px] font-semibold ${partialTpRealized >= 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}`}>${formatMoney(partialTpRealized)}</p>
                 </div>
               </div>
-            </motion.div>
+            </Motion.div>
         )}
       </div>
   );
 }
+
+

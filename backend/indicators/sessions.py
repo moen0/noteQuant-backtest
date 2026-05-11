@@ -22,36 +22,42 @@ SESSIONS_MT5 = {
 _active_sessions = SESSIONS_EST
 
 
+def get_sessions_for_tz(tz="est"):
+    if tz and tz.lower() in ("mt5", "utc+2", "server"):
+        return SESSIONS_MT5
+    return SESSIONS_EST
+
+
 def set_timezone(tz="est"):
     global _active_sessions
-    if tz.lower() in ("mt5", "utc+2", "server"):
-        _active_sessions = SESSIONS_MT5
-    else:
-        _active_sessions = SESSIONS_EST
+    _active_sessions = get_sessions_for_tz(tz)
 
 
-def in_session(candle_time, session_name):
+def in_session(candle_time, session_name, sessions_map=None):
     if session_name == "all":
         return True
-    if session_name not in _active_sessions:
+    active = sessions_map or _active_sessions
+    if session_name not in active:
         return True
 
     t = candle_time.time()
-    start, end = _active_sessions[session_name]
+    start, end = active[session_name]
     if start > end:
         return t >= start or t < end
     return start <= t < end
 
 
-def get_session(candle_time):
-    for name in _active_sessions:
-        if in_session(candle_time, name):
+def get_session(candle_time, sessions_map=None):
+    active = sessions_map or _active_sessions
+    for name in active:
+        if in_session(candle_time, name, sessions_map=active):
             return name
     return "off_hours"
 
 
-def filter_by_session(candles, session_name):
-    return [c for c in candles if in_session(c.time_open, session_name)]
+def filter_by_session(candles, session_name, sessions_map=None):
+    active = sessions_map or _active_sessions
+    return [c for c in candles if in_session(c.time_open, session_name, sessions_map=active)]
 
 
 def in_day_filter(candle_time, allowed_days):
@@ -60,8 +66,9 @@ def in_day_filter(candle_time, allowed_days):
     return candle_time.weekday() in allowed_days
 
 
-def get_asian_range(candles):
-    asian = filter_by_session(candles, "asian")
+def get_asian_range(candles, sessions_map=None):
+    active = sessions_map or _active_sessions
+    asian = filter_by_session(candles, "asian", sessions_map=active)
     if not asian:
         return None
     return {
