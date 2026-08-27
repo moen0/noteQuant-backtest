@@ -6,28 +6,9 @@ import {
   createChart,
   createSeriesMarkers,
 } from 'lightweight-charts';
-
-const CHART_THEME = {
-  layout: { background: { color: '#0a0a0a' }, textColor: '#737373', fontFamily: 'Inter, system-ui, sans-serif', fontSize: 11 },
-  grid: { vertLines: { color: '#1a1a1a' }, horzLines: { color: '#1a1a1a' } },
-  crosshair: {
-    vertLine: { color: 'rgba(250, 250, 250, 0.15)', labelBackgroundColor: '#262626' },
-    horzLine: { color: 'rgba(250, 250, 250, 0.15)', labelBackgroundColor: '#262626' },
-  },
-  rightPriceScale: { borderColor: '#262626', textColor: '#737373' },
-  timeScale: { borderColor: '#262626', timeVisible: true, secondsVisible: false },
-};
-
-const TIMEFRAMES = [
-  { label: '1m', value: 1 },
-  { label: '3m', value: 3 },
-  { label: '5m', value: 5 },
-  { label: '15m', value: 15 },
-  { label: '30m', value: 30 },
-  { label: '1H', value: 60 },
-];
-
-const RR_OPTIONS = [1, 1.5, 2, 2.5, 3];
+import { TIMEFRAMES, RR_OPTIONS, STARTING_BALANCE, CHART_THEME } from '../constants';
+import { formatMoney, buildTradeMarkers, calculateProfitFactor, calculateMaxDrawdownFromTrades } from '../utils';
+import { NumberInput } from './NumberInput';
 const SESSIONS = ['london', 'new_york', 'asian', 'london_close', 'london_ny_overlap', 'all'];
 const DAYS = [
   { label: 'Mon', value: 0 },
@@ -36,39 +17,10 @@ const DAYS = [
   { label: 'Thu', value: 3 },
   { label: 'Fri', value: 4 },
 ];
-const STARTING_BALANCE = 10000;
 const PRESETS_KEY = 'nq_backtest_presets';
 const RESULT_HISTORY_KEY = 'nq_backtest_recent_results';
 const RESULT_HISTORY_LIMIT = 10;
 const DEFAULT_PRESET_NAME = 'Manual';
-
-function formatMoney(v) {
-  return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function calculateProfitFactor(trades) {
-  const winners = trades.filter((trade) => trade.pnl > 0).reduce((sum, trade) => sum + trade.pnl, 0);
-  const losers = Math.abs(trades.filter((trade) => trade.pnl < 0).reduce((sum, trade) => sum + trade.pnl, 0));
-  if (losers <= 0) return winners > 0 ? 999 : 0;
-  return Number((winners / losers).toFixed(2));
-}
-
-function calculateMaxDrawdown(trades, startingBalance = STARTING_BALANCE) {
-  if (!trades.length) return 0;
-  let equity = startingBalance;
-  let peak = startingBalance;
-  let maxDrawdown = 0;
-  trades
-      .slice()
-      .sort((a, b) => new Date(a.exit_time) - new Date(b.exit_time))
-      .forEach((trade) => {
-        equity += trade.pnl;
-        if (equity > peak) peak = equity;
-        const drawdown = ((peak - equity) / peak) * 100;
-        if (drawdown > maxDrawdown) maxDrawdown = drawdown;
-      });
-  return Number(maxDrawdown.toFixed(2));
-}
 
 function loadPresets() {
   try {
@@ -91,23 +43,6 @@ function loadRecentResults() {
 
 function saveRecentResults(results) {
   localStorage.setItem(RESULT_HISTORY_KEY, JSON.stringify(results.slice(0, RESULT_HISTORY_LIMIT)));
-}
-
-function NumberInput({ label, value, onChange, min, max, step = 1 }) {
-  return (
-      <div className="flex flex-col gap-1.5">
-        <label className="text-[11px] text-[#525252] font-mono uppercase tracking-widest">{label}</label>
-        <input
-            type="number"
-            value={value}
-            min={min}
-            max={max}
-            step={step}
-            onChange={(e) => onChange(Number(e.target.value))}
-            className="w-full border border-[#262626] bg-black text-[#fafafa] font-mono text-[13px] px-3 py-2 outline-none focus:border-[#404040] transition-colors"
-        />
-      </div>
-  );
 }
 
 function ToggleInput({ label, value, onChange, color = '#10b981' }) {
@@ -193,6 +128,10 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
   const [maxDailyLoss, setMaxDailyLoss] = useState(0.0);
   const [maxConsecutiveLosses, setMaxConsecutiveLosses] = useState(0);
 
+  const [slippage, setSlippage] = useState(0.0);
+  const [spread, setSpread] = useState(0.0);
+  const [intrabarPolicy, setIntrabarPolicy] = useState('stop_first');
+
   // Presets
   const [presets, setPresets] = useState(loadPresets);
   const [presetName, setPresetName] = useState('');
@@ -208,6 +147,7 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
     useBreakEven, beTriggerRr,
     usePartialTp, partialTpRr, partialTpPercent,
     maxDailyLoss, maxConsecutiveLosses,
+    slippage, spread, intrabarPolicy,
   });
 
   const applySettings = (s) => {
@@ -237,6 +177,9 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
     if (s.dayFilter !== undefined) setDayFilter(s.dayFilter);
     if (s.maxDailyLoss !== undefined) setMaxDailyLoss(s.maxDailyLoss);
     if (s.maxConsecutiveLosses !== undefined) setMaxConsecutiveLosses(s.maxConsecutiveLosses);
+    if (s.slippage !== undefined) setSlippage(s.slippage);
+    if (s.spread !== undefined) setSpread(s.spread);
+    if (s.intrabarPolicy !== undefined) setIntrabarPolicy(s.intrabarPolicy);
   };
 
   const handleSavePreset = () => {
@@ -402,6 +345,9 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
         day_filter: dayFilter.join(','),
         max_daily_loss: maxDailyLoss.toString(),
         max_consecutive_losses: maxConsecutiveLosses.toString(),
+        intrabar_policy: intrabarPolicy,
+        slippage: slippage.toString(),
+        spread: spread.toString(),
       });
 
       const [candleRes, backtestRes] = await Promise.all([
@@ -421,26 +367,7 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
       }));
       candleSeriesRef.current?.setData(candles);
 
-      const markers = [];
-      if (backtestData.trades) {
-        backtestData.trades.forEach((trade) => {
-          const isWin = trade.pnl > 0;
-          markers.push({
-            time: Math.floor(new Date(trade.enter_time).getTime() / 1000),
-            position: trade.direction === 'long' ? 'belowBar' : 'aboveBar',
-            color: isWin ? '#10b981' : '#ef4444',
-            shape: trade.direction === 'long' ? 'arrowUp' : 'arrowDown',
-            text: trade.direction === 'long' ? 'BUY' : 'SELL',
-          });
-          markers.push({
-            time: Math.floor(new Date(trade.exit_time).getTime() / 1000),
-            position: 'inBar',
-            color: isWin ? '#10b981' : '#ef4444',
-            shape: 'circle',
-            text: isWin ? `+${trade.pnl.toFixed(2)}` : trade.pnl.toFixed(2),
-          });
-        });
-      }
+      const markers = buildTradeMarkers(backtestData.trades || []);
 
       markers.sort((a, b) => a.time - b.time);
       markersRef.current?.setMarkers([]);
@@ -511,7 +438,9 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
     requireFvgObConfluence, asianSweepOnly, dayFilter,
     useBreakEven, beTriggerRr,
     usePartialTp, partialTpRr, partialTpPercent,
-    maxDailyLoss, maxConsecutiveLosses, onBacktestComplete, activePresetName,
+    maxDailyLoss, maxConsecutiveLosses,
+    slippage, spread, intrabarPolicy,
+    onBacktestComplete, activePresetName,
   ]);
 
   const runMonteCarlo = useCallback(async () => {
@@ -549,7 +478,7 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
           base_net_pnl: totalPnlLocal,
           base_win_rate: winRateLocal,
           base_profit_factor: calculateProfitFactor(results.trades),
-          base_max_drawdown_pct: calculateMaxDrawdown(results.trades, STARTING_BALANCE),
+          base_max_drawdown_pct: calculateMaxDrawdownFromTrades(results.trades, STARTING_BALANCE),
         }),
       });
 
@@ -816,6 +745,33 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
           <div className="flex flex-wrap gap-3 mt-4">
             <ToggleInput label="Use Break-Even" value={useBreakEven} onChange={setUseBreakEven} />
             <ToggleInput label="Use Partial TP" value={usePartialTp} onChange={setUsePartialTp} />
+          </div>
+
+          <div className="border-t border-[#1a1a1a] my-6" />
+          <SectionHeader title="Execution Realism" subtitle="Slippage, spread, and fill policy" />
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 mb-4">
+            <NumberInput label="Slippage (pips)" value={slippage} onChange={setSlippage} min={0} max={0.005} step={0.0001} />
+            <NumberInput label="Spread (pips)" value={spread} onChange={setSpread} min={0} max={0.005} step={0.0001} />
+          </div>
+          <div className="flex flex-wrap gap-3 mb-6">
+            <span className="text-[11px] text-[#525252] font-mono uppercase tracking-widest self-center mr-2">Intrabar Policy</span>
+            {[
+              { value: 'stop_first', label: 'Stop First' },
+              { value: 'target_first', label: 'Target First' },
+              { value: 'ohlc_path', label: 'OHLC Path' },
+            ].map((policy) => (
+              <button
+                key={policy.value}
+                className={`px-3 py-1.5 text-[12px] font-mono border transition-colors ${
+                  intrabarPolicy === policy.value
+                    ? 'border-[#404040] text-[#fafafa] bg-[#1a1a1a]'
+                    : 'border-[#262626] text-[#525252] hover:text-[#fafafa]'
+                }`}
+                onClick={() => setIntrabarPolicy(policy.value)}
+              >
+                {policy.label}
+              </button>
+            ))}
           </div>
         </Motion.div>
 

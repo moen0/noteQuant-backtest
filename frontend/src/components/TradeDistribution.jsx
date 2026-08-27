@@ -1,11 +1,5 @@
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-
-function formatCurrency(value) {
-  return value.toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
+import { formatMoney } from '../utils';
 
 function CustomTooltip({ active, payload, total }) {
   if (active && payload && payload.length) {
@@ -66,7 +60,7 @@ export function TradeDistribution({ wins = 0, losses = 0, avgWin = 0, avgLoss = 
             </div>
             <div className="text-right">
               <p className="text-[13px] text-[#737373] mb-1">Avg. Win</p>
-              <p className="text-[16px] font-semibold text-[#10b981]">${formatCurrency(avgWin)}</p>
+              <p className="text-[16px] font-semibold text-[#10b981]">${formatMoney(avgWin)}</p>
             </div>
           </div>
 
@@ -77,7 +71,7 @@ export function TradeDistribution({ wins = 0, losses = 0, avgWin = 0, avgLoss = 
             </div>
             <div className="text-right">
               <p className="text-[13px] text-[#737373] mb-1">Avg. Loss</p>
-              <p className="text-[16px] font-semibold text-[#ef4444]">${formatCurrency(avgLoss)}</p>
+              <p className="text-[16px] font-semibold text-[#ef4444]">${formatMoney(avgLoss)}</p>
             </div>
           </div>
         </div>

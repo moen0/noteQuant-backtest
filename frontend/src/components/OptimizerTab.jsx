@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from 'recharts';
+import { NumberInput } from './NumberInput';
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
 const TIMEFRAMES = [1, 3, 5, 15, 30, 60];
@@ -16,22 +17,6 @@ const OBJECTIVES = [
   { key: 'pf_x_wr', label: 'PF x WR' },
   { key: 'custom_fitness', label: 'Fitness' },
 ];
-
-function NumberInput({ label, value, onChange, min = 0, step = 1 }) {
-  return (
-      <div className="flex flex-col gap-1.5">
-        <label className="text-[11px] text-[#525252] font-mono uppercase tracking-widest">{label}</label>
-        <input
-            type="number"
-            min={min}
-            step={step}
-            value={value}
-            onChange={(e) => onChange(Number(e.target.value))}
-            className="w-full border border-[#262626] bg-black text-[#fafafa] font-mono text-[13px] px-3 py-2 outline-none focus:border-[#404040] transition-colors"
-        />
-      </div>
-  );
-}
 
 function TextListInput({ label, value, onChange, placeholder }) {
   return (
@@ -75,7 +60,7 @@ function parseBoolList(value, fallback) {
 }
 
 export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, onActivateResult }) {
-  const [abortController, setAbortController] = useState(null);
+  const abortControllerRef = useRef(null);
   const [timeframe, setTimeframe] = useState(5);
   const [riskRewards, setRiskRewards] = useState('1,1.5,2.0,2.5,3.0');
   const [minTrades, setMinTrades] = useState(5);
@@ -155,6 +140,9 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
     asianSweepOnly: params.asian_sweep_only === true || params.asian_sweep_only === 'true',
     useBreakEven: params.use_break_even === true || params.use_break_even === 'true',
     beTriggerRr: Number(params.be_trigger_rr ?? 1.0),
+    usePartialTp: params.use_partial_tp === true || params.use_partial_tp === 'true',
+    partialTpRr: Number(params.partial_tp_rr ?? 1.0),
+    partialTpPercent: Number(params.partial_tp_percent ?? 50.0),
     dayFilter: [0, 1, 2, 3, 4],
     maxDailyLoss: 0,
     maxConsecutiveLosses: 0,
@@ -308,9 +296,11 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
 
   const runOptimization = useCallback(async () => {
     if (!selectedDataset) return;
-    abortController?.abort();
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
     const controller = new AbortController();
-    setAbortController(controller);
+    abortControllerRef.current = controller;
 
     setLoading(true);
     setErrorMessage('');
@@ -437,10 +427,9 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
       setErrorMessage(err instanceof Error ? err.message : 'Optimization failed');
     } finally {
       setLoading(false);
-      setAbortController(null);
+      abortControllerRef.current = null;
     }
   }, [
-    abortController,
     selectedDataset,
     timeframe,
     riskRewards,
@@ -470,8 +459,10 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
   ]);
 
   const abortOptimization = useCallback(() => {
-    abortController?.abort();
-  }, [abortController]);
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+  }, []);
 
   const runMonteCarlo = useCallback(async () => {
     const targetParams = selectedTopResult?.params ?? best?.params;
@@ -556,8 +547,10 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
   }, [sortedTopResults, selectedTopRowId, makeTopRowId]);
 
   useEffect(() => () => {
-    abortController?.abort();
-  }, [abortController]);
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+  }, []);
 
 
   return (
@@ -856,6 +849,123 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
                     <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Profit Factor</p><p className="text-[16px] font-semibold">{best.profit_factor?.toFixed(2)}</p></div>
                     <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Calmar</p><p className="text-[16px] font-semibold">{best.calmar_ratio?.toFixed(2)}</p></div>
                     <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Max DD %</p><p className="text-[16px] font-semibold">{best.max_drawdown_pct?.toFixed(2)}</p></div>
+                  </div>
+              )}
+
+              {result?.overfitting && (
+                  <div className="p-4 border border-[#1a1a1a] bg-black/40">
+                    <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest mb-3">Overfitting Analysis</p>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div>
+                        <p className="text-[10px] text-[#737373] font-mono uppercase">Observed Sharpe</p>
+                        <p className="text-[16px] font-semibold">{Number(result.overfitting.observed_sharpe ?? 0).toFixed(3)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[#737373] font-mono uppercase">Deflated Sharpe</p>
+                        <p className={`text-[16px] font-semibold ${(result.overfitting.deflated_sharpe ?? 0) > 0.5 ? 'text-[#10b981]' : (result.overfitting.deflated_sharpe ?? 0) > 0 ? 'text-[#eab308]' : 'text-[#ef4444]'}`}>
+                          {Number(result.overfitting.deflated_sharpe ?? 0).toFixed(3)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[#737373] font-mono uppercase">P-Value</p>
+                        <p className={`text-[16px] font-semibold ${(result.overfitting.dsr_p_value ?? 1) < 0.05 ? 'text-[#10b981]' : (result.overfitting.dsr_p_value ?? 1) < 0.25 ? 'text-[#eab308]' : 'text-[#ef4444]'}`}>
+                          {Number(result.overfitting.dsr_p_value ?? 1).toFixed(4)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[#737373] font-mono uppercase">Min Trades (95%)</p>
+                        <p className="text-[16px] font-semibold">{result.overfitting.min_trades_95 ?? '-'}</p>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-[#525252] font-mono mt-3">
+                      {Number(result.overfitting.dsr_p_value ?? 1) < 0.05
+                        ? 'Result is likely real (statistically significant after multiple testing adjustment).'
+                        : Number(result.overfitting.dsr_p_value ?? 1) < 0.25
+                          ? 'Marginal significance -- possible overfitting.'
+                          : 'High overfitting risk. This Sharpe ratio is likely due to luck.'}
+                    </p>
+                  </div>
+              )}
+
+              {result?.parameter_sensitivity && Object.keys(result.parameter_sensitivity).length > 0 && (
+                  <div className="p-4 border border-[#1a1a1a] bg-black/40">
+                    <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest mb-3">Parameter Sensitivity</p>
+                    <p className="text-[11px] text-[#525252] font-mono mb-3">How the rank objective changes across parameter values. High range = high sensitivity = fragile.</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {Object.entries(result.parameter_sensitivity).map(([paramName, data]) => (
+                        <div key={paramName} className="p-3 border border-[#1a1a1a]">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-[12px] font-mono font-semibold">{paramName}</span>
+                            <span className={`text-[10px] font-mono px-2 py-0.5 ${data.sensitive ? 'bg-[#ef4444]/20 text-[#ef4444]' : 'bg-[#10b981]/20 text-[#10b981]'}`}>
+                              {data.sensitive ? 'FRAGILE' : 'STABLE'}
+                            </span>
+                          </div>
+                          <div className="space-y-1">
+                            {Object.entries(data.values || {}).map(([val, stats]) => (
+                              <div key={val} className="flex justify-between text-[11px] font-mono">
+                                <span className="text-[#737373]">{val}</span>
+                                <span className={stats.median > 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}>
+                                  {stats.median?.toFixed(3)} ({stats.count})
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="mt-2 text-[10px] font-mono text-[#525252]">
+                            Range: {data.range?.toFixed(4)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+              )}
+
+              {result?.validation_results && result.validation_results.length > 0 && (
+                  <div className="p-4 border border-[#1a1a1a] bg-black/40">
+                    <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest mb-3">Walk-Forward: Validation Results</p>
+                    <div className="overflow-auto">
+                      <div className="grid grid-cols-[60px_90px_100px_100px_100px] gap-3 px-4 py-2 text-[10px] font-mono uppercase tracking-widest text-[#737373] border-b border-[#1a1a1a]">
+                        <span>#</span>
+                        <span>Train PnL</span>
+                        <span>Train WR</span>
+                        <span>Val PnL</span>
+                        <span>Val WR</span>
+                      </div>
+                      {result.validation_results.map((entry, idx) => (
+                        <div key={idx} className="grid grid-cols-[60px_90px_100px_100px_100px] gap-3 px-4 py-2 text-[12px] font-mono border-b border-[#111111]">
+                          <span>{idx + 1}</span>
+                          <span className={(entry.train?.net_pnl ?? 0) >= 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}>{(entry.train?.net_pnl ?? 0).toFixed(2)}</span>
+                          <span>{(entry.train?.win_rate ?? 0).toFixed(1)}%</span>
+                          <span className={(entry.validation?.net_pnl ?? 0) >= 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}>{(entry.validation?.net_pnl ?? 0).toFixed(2)}</span>
+                          <span>{(entry.validation?.win_rate ?? 0).toFixed(1)}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+              )}
+
+              {result?.test_result && (
+                  <div className="p-4 border border-[#1a1a1a] bg-black/40">
+                    <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest mb-3">Walk-Forward: Test Result (Out-of-Sample)</p>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div>
+                        <p className="text-[10px] text-[#737373] font-mono uppercase">Net PnL</p>
+                        <p className={`text-[16px] font-semibold ${(result.test_result.test?.net_pnl ?? 0) >= 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}`}>
+                          {Number(result.test_result.test?.net_pnl ?? 0).toFixed(2)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[#737373] font-mono uppercase">Win Rate</p>
+                        <p className="text-[16px] font-semibold">{Number(result.test_result.test?.win_rate ?? 0).toFixed(1)}%</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[#737373] font-mono uppercase">Sharpe</p>
+                        <p className="text-[16px] font-semibold">{Number(result.test_result.test?.sharpe_ratio ?? 0).toFixed(3)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-[#737373] font-mono uppercase">Max DD %</p>
+                        <p className="text-[16px] font-semibold">{Number(result.test_result.test?.max_drawdown_pct ?? 0).toFixed(2)}</p>
+                      </div>
+                    </div>
                   </div>
               )}
 

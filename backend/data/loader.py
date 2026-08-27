@@ -1,5 +1,8 @@
 import pandas as pd
+import logging
 from data.model import Candle
+
+log = logging.getLogger(__name__)
 
 def load_candles(filepath: str) -> list[Candle]:
     df = pd.read_csv(filepath, sep=";", header=None, names=["timestamp", "open", "high", "low", "close", "volume"])
@@ -22,7 +25,7 @@ def load_candles(filepath: str) -> list[Candle]:
 
 def resample_candles(candles, period=5):
     resampled = []
-    for i in range(0, len(candles) - period + 1, period):
+    for i in range(0, len(candles), period):
         group = candles[i:i + period]
         resampled.append(Candle(
             time_open=group[0].time_open,

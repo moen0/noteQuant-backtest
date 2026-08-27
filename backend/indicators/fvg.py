@@ -16,7 +16,6 @@ def find_fvgs(candles, min_gap_size=0.0, impulse_multiplier=0.0):
             middle_body = abs(c2.close - c2.open)
             if middle_body < avg_body * impulse_multiplier:
                 continue
-            # Update rolling average
             avg_body = (avg_body * 19 + middle_body) / 20
 
         # Bullish FVG
@@ -42,7 +41,8 @@ def find_fvgs(candles, min_gap_size=0.0, impulse_multiplier=0.0):
                     "bottom": c3.high,
                     "mitigated": False,
                 })
-        # Mark mitigated FVGs
+
+        # Mark mitigated FVGs — only check unmitigated ones
         for fvg in fvgs:
             if fvg["mitigated"]:
                 continue

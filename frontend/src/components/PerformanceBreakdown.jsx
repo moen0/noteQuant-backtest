@@ -8,13 +8,7 @@ import {
     Cell,
     CartesianGrid,
 } from 'recharts';
-
-function formatCurrency(value) {
-    return value.toLocaleString('en-US', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-    });
-}
+import { formatMoney } from '../utils';
 
 function CustomTooltip({ active, payload }) {
     if (active && payload && payload.length) {
@@ -99,11 +93,11 @@ export function PerformanceBreakdown({ monthlyReturns = [], largestWin = 0, larg
                 </div>
                 <div className="p-4 border border-[#1a1a1a] bg-black/40">
                     <p className="text-[13px] text-[#737373] mb-2">Largest Win</p>
-                    <p className="text-[24px] font-semibold text-[#10b981]">${formatCurrency(largestWin)}</p>
+                    <p className="text-[24px] font-semibold text-[#10b981]">${formatMoney(largestWin)}</p>
                 </div>
                 <div className="p-4 border border-[#1a1a1a] bg-black/40">
                     <p className="text-[13px] text-[#737373] mb-2">Largest Loss</p>
-                    <p className="text-[24px] font-semibold text-[#ef4444]">${formatCurrency(largestLoss)}</p>
+                    <p className="text-[24px] font-semibold text-[#ef4444]">${formatMoney(largestLoss)}</p>
                 </div>
             </div>
         </div>

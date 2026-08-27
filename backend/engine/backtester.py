@@ -3,6 +3,63 @@ from collections import defaultdict
 import math
 
 
+INTRABAR_POLICIES = ("stop_first", "target_first", "ohlc_path")
+DEFAULT_INTRABAR_POLICY = "stop_first"
+
+
+def _normalize_policy(policy):
+    if policy in INTRABAR_POLICIES:
+        return policy
+    return DEFAULT_INTRABAR_POLICY
+
+
+def _open_position(signal, candle, equity, risk_reward, risk_pct,
+                   slippage=0.0, spread=0.0):
+    """Create a position from a signal at the next candle's open.
+
+    Signals are generated after a candle closes.  Filling on the next open
+    avoids granting the strategy an impossible fill inside the signal candle.
+
+    slippage and spread are applied against the trader (worse fill).
+    """
+    is_long = signal.direction == "BUY"
+    raw_entry = candle.open
+    penalty = max(float(slippage or 0.0), 0.0) + max(float(spread or 0.0), 0.0)
+    entry = raw_entry + penalty if is_long else raw_entry - penalty
+    sl = signal.stop_loss
+    sl_distance = abs(entry - sl)
+    if (
+        sl_distance <= 0
+        or not math.isfinite(sl_distance)
+        or not math.isfinite(entry)
+        or not math.isfinite(sl)
+        or risk_pct <= 0
+    ):
+        return None
+
+    risk_amount = equity * (risk_pct / 100)
+    if risk_amount <= 0 or not math.isfinite(risk_amount):
+        return None
+
+    lot_size = risk_amount / sl_distance
+    if lot_size <= 0 or not math.isfinite(lot_size):
+        return None
+
+    return {
+        "direction": "long" if is_long else "short",
+        "entry_price": entry,
+        "enter_time": candle.time_open,
+        "stop_loss": sl,
+        "take_profit": entry + (sl_distance * risk_reward) if is_long else entry - (sl_distance * risk_reward),
+        "risk_distance": sl_distance,
+        "lot_size": lot_size,
+        "initial_lot_size": lot_size,
+        "break_even_armed": False,
+        "partial_tp_taken": False,
+        "partial_tp_realized_pnl": 0.0,
+    }
+
+
 def _apply_break_even_if_triggered(position, candle, strategy):
     if not position:
         return
@@ -76,141 +133,114 @@ def _apply_partial_tp_if_triggered(position, candle, strategy):
     position["partial_tp_realized_pnl"] = position.get("partial_tp_realized_pnl", 0.0) + partial_pnl
 
 
-def run_backtest(candles, strategy, starting_balance, risk_reward=1.0,
-                 max_daily_loss=0.0, max_consecutive_losses=0, risk_pct=1.0):
-    trades = []
-    position = None
-    consecutive_losses = 0
-    daily_pnl = defaultdict(float)
-    equity = float(starting_balance)
-    if hasattr(strategy, "prepare"):
-        strategy.prepare(candles)
+def _resolve_intrabar_exit(position, candle, intrabar_policy):
+    """Return (hit_sl, hit_tp, exit_price) applying the intrabar policy.
 
-    for i, candle in enumerate(candles):
-        if position:
-            _apply_break_even_if_triggered(position, candle, strategy)
-            _apply_partial_tp_if_triggered(position, candle, strategy)
+    When only one of stop/target is touched this is unambiguous.  When both
+    are touched inside a single candle the OHLC does not reveal the order,
+    so the configured policy decides which fill wins.
+    """
+    is_long = position["direction"] == "long"
+    sl, tp = position["stop_loss"], position["take_profit"]
 
-            is_long = position["direction"] == "long"
-            sl, tp = position["stop_loss"], position["take_profit"]
+    if is_long:
+        hit_sl = candle.low <= sl
+        hit_tp = candle.high >= tp
+    else:
+        hit_sl = candle.high >= sl
+        hit_tp = candle.low <= tp
 
-            hit_sl = candle.low <= sl if is_long else candle.high >= sl
-            hit_tp = candle.high >= tp if is_long else candle.low <= tp
+    if not hit_sl and not hit_tp:
+        return False, False, None
 
-            if hit_sl or hit_tp:
-                exit_price = sl if hit_sl else tp
-                price_move = (exit_price - position["entry_price"]) if is_long else (position["entry_price"] - exit_price)
-                lot_size = max(position.get("lot_size", 0.0), 0.0)
-                partial_pnl = float(position.get("partial_tp_realized_pnl", 0.0) or 0.0)
-                pnl = (price_move * lot_size) + partial_pnl
-                risk_distance = max(position.get("risk_distance", 0.0), 1e-12)
-                r_multiple = price_move / risk_distance
-
-                trades.append(Trade(
-                    enter_time=position["enter_time"],
-                    enter_price=position["entry_price"],
-                    direction=position["direction"],
-                    exit_time=candle.time_open,
-                    exit_price=exit_price,
-                    pnl=pnl,
-                    r_multiple=r_multiple,
-                    partial_tp_taken=bool(position.get("partial_tp_taken", False)),
-                    partial_tp_realized_pnl=partial_pnl,
-                ))
-                position = None
-                equity += pnl
-
-                if pnl <= 0:
-                    consecutive_losses += 1
+    if hit_sl and hit_tp:
+        if intrabar_policy == "target_first":
+            return False, True, tp
+        if intrabar_policy == "ohlc_path":
+            # Deterministic path: open -> high -> low -> close for bull candles,
+            # open -> low -> high -> close for bear candles.  Whichever level
+            # the walked path touches first wins.
+            bull_candle = candle.close >= candle.open
+            path = (
+                [candle.open, candle.high, candle.low, candle.close]
+                if bull_candle
+                else [candle.open, candle.low, candle.high, candle.close]
+            )
+            for a, b in zip(path, path[1:]):
+                low_leg = min(a, b)
+                high_leg = max(a, b)
+                if is_long:
+                    stop_touched = low_leg <= sl <= high_leg
+                    target_touched = low_leg <= tp <= high_leg
                 else:
-                    consecutive_losses = 0
+                    stop_touched = low_leg <= sl <= high_leg
+                    target_touched = low_leg <= tp <= high_leg
+                if stop_touched and target_touched:
+                    return True, False, sl
+                if stop_touched:
+                    return True, False, sl
+                if target_touched:
+                    return False, True, tp
+            return True, False, sl
+        return True, False, sl
 
-                daily_pnl[candle.time_open.date()] += pnl
+    if hit_sl:
+        return True, False, sl
+    return False, True, tp
 
-        if position is None:
-            if equity <= 0:
-                continue
-            if max_consecutive_losses > 0 and consecutive_losses >= max_consecutive_losses:
-                continue
-            if max_daily_loss > 0:
-                loss_limit = starting_balance * (max_daily_loss / 100)
-                if daily_pnl[candle.time_open.date()] <= -loss_limit:
-                    continue
 
-            signal = strategy.check_signal(candles, i)
+def _close_position(position, candle, exit_price, exit_time):
+    is_long = position["direction"] == "long"
+    price_move = (exit_price - position["entry_price"]) if is_long else (position["entry_price"] - exit_price)
+    lot_size = max(position.get("lot_size", 0.0), 0.0)
+    partial_pnl = float(position.get("partial_tp_realized_pnl", 0.0) or 0.0)
+    pnl = (price_move * lot_size) + partial_pnl
+    initial_risk = max(
+        position.get("risk_distance", 0.0)
+        * position.get("initial_lot_size", position.get("lot_size", 0.0)),
+        1e-12,
+    )
+    r_multiple = pnl / initial_risk
+    return Trade(
+        enter_time=position["enter_time"],
+        enter_price=position["entry_price"],
+        direction=position["direction"],
+        exit_time=exit_time,
+        exit_price=exit_price,
+        pnl=pnl,
+        r_multiple=r_multiple,
+        partial_tp_taken=bool(position.get("partial_tp_taken", False)),
+        partial_tp_realized_pnl=partial_pnl,
+    )
 
-            if signal is not None:
-                is_long = signal.direction == "BUY"
-                entry = signal.entry_price
-                sl = signal.stop_loss
-                sl_distance = abs(entry - sl)
-                if (
-                    sl_distance <= 0
-                    or not math.isfinite(sl_distance)
-                    or not math.isfinite(entry)
-                    or not math.isfinite(sl)
-                    or risk_pct <= 0
-                ):
-                    continue
 
-                risk_amount = equity * (risk_pct / 100)
-                if risk_amount <= 0 or not math.isfinite(risk_amount):
-                    continue
-
-                lot_size = risk_amount / sl_distance
-                if lot_size <= 0 or not math.isfinite(lot_size):
-                    continue
-
-                tp = entry + (sl_distance * risk_reward) if is_long else entry - (sl_distance * risk_reward)
-
-                position = {
-                    "direction": "long" if is_long else "short",
-                    "entry_price": entry,
-                    "enter_time": candle.time_open,
-                    "stop_loss": sl,
-                    "take_profit": tp,
-                    "risk_distance": sl_distance,
-                    "lot_size": lot_size,
-                    "break_even_armed": False,
-                    "partial_tp_taken": False,
-                    "partial_tp_realized_pnl": 0.0,
-                }
-
-    if position and candles:
-        last_candle = candles[-1]
-        is_long = position["direction"] == "long"
-        exit_price = last_candle.close
-        price_move = (exit_price - position["entry_price"]) if is_long else (position["entry_price"] - exit_price)
-        lot_size = max(position.get("lot_size", 0.0), 0.0)
-        partial_pnl = float(position.get("partial_tp_realized_pnl", 0.0) or 0.0)
-        pnl = (price_move * lot_size) + partial_pnl
-        risk_distance = max(position.get("risk_distance", 0.0), 1e-12)
-        r_multiple = price_move / risk_distance
-
-        trades.append(Trade(
-            enter_time=position["enter_time"],
-            enter_price=position["entry_price"],
-            direction=position["direction"],
-            exit_time=last_candle.time_open,
-            exit_price=exit_price,
-            pnl=pnl,
-            r_multiple=r_multiple,
-            partial_tp_taken=bool(position.get("partial_tp_taken", False)),
-            partial_tp_realized_pnl=partial_pnl,
-        ))
-        equity += pnl
-        daily_pnl[last_candle.time_open.date()] += pnl
-
+def run_backtest(candles, strategy, starting_balance, risk_reward=1.0,
+                 max_daily_loss=0.0, max_consecutive_losses=0, risk_pct=1.0,
+                 intrabar_policy=DEFAULT_INTRABAR_POLICY,
+                 slippage=0.0, spread=0.0):
+    trades = []
+    for event in run_backtest_stream(
+        candles, strategy, starting_balance, risk_reward=risk_reward,
+        max_daily_loss=max_daily_loss, max_consecutive_losses=max_consecutive_losses,
+        risk_pct=risk_pct, intrabar_policy=intrabar_policy,
+        slippage=slippage, spread=spread,
+    ):
+        if event["type"] == "trade":
+            trades.append(event["trade"])
     return trades
 
 
 def run_backtest_stream(candles, strategy, starting_balance, risk_reward=1.0,
-                        max_daily_loss=0.0, max_consecutive_losses=0, risk_pct=1.0):
+                        max_daily_loss=0.0, max_consecutive_losses=0, risk_pct=1.0,
+                        intrabar_policy=DEFAULT_INTRABAR_POLICY,
+                        slippage=0.0, spread=0.0):
     position = None
+    pending_signal = None
     consecutive_losses = 0
     daily_pnl = defaultdict(float)
     total = len(candles)
     equity = float(starting_balance)
+    policy = _normalize_policy(intrabar_policy)
 
     if hasattr(strategy, "prepare"):
         strategy.prepare(candles)
@@ -223,36 +253,20 @@ def run_backtest_stream(candles, strategy, starting_balance, risk_reward=1.0,
         if i % progress_interval == 0:
             yield {"type": "progress", "processed_candles": i, "total_candles": total}
 
+        if position is None and pending_signal is not None:
+            position = _open_position(pending_signal, candle, equity, risk_reward, risk_pct,
+                                      slippage=slippage, spread=spread)
+            pending_signal = None
+
         if position:
             _apply_break_even_if_triggered(position, candle, strategy)
             _apply_partial_tp_if_triggered(position, candle, strategy)
 
-            is_long = position["direction"] == "long"
-            sl, tp = position["stop_loss"], position["take_profit"]
-
-            hit_sl = candle.low <= sl if is_long else candle.high >= sl
-            hit_tp = candle.high >= tp if is_long else candle.low <= tp
+            hit_sl, hit_tp, exit_price = _resolve_intrabar_exit(position, candle, policy)
 
             if hit_sl or hit_tp:
-                exit_price = sl if hit_sl else tp
-                price_move = (exit_price - position["entry_price"]) if is_long else (position["entry_price"] - exit_price)
-                lot_size = max(position.get("lot_size", 0.0), 0.0)
-                partial_pnl = float(position.get("partial_tp_realized_pnl", 0.0) or 0.0)
-                pnl = (price_move * lot_size) + partial_pnl
-                risk_distance = max(position.get("risk_distance", 0.0), 1e-12)
-                r_multiple = price_move / risk_distance
-
-                trade = Trade(
-                    enter_time=position["enter_time"],
-                    enter_price=position["entry_price"],
-                    direction=position["direction"],
-                    exit_time=candle.time_open,
-                    exit_price=exit_price,
-                    pnl=pnl,
-                    r_multiple=r_multiple,
-                    partial_tp_taken=bool(position.get("partial_tp_taken", False)),
-                    partial_tp_realized_pnl=partial_pnl,
-                )
+                trade = _close_position(position, candle, exit_price, candle.time_open)
+                pnl = trade.pnl
                 position = None
                 equity += pnl
 
@@ -278,66 +292,13 @@ def run_backtest_stream(candles, strategy, starting_balance, risk_reward=1.0,
             signal = strategy.check_signal(candles, i)
 
             if signal is not None:
-                is_long = signal.direction == "BUY"
-                entry = signal.entry_price
-                sl = signal.stop_loss
-                sl_distance = abs(entry - sl)
-                if (
-                    sl_distance <= 0
-                    or not math.isfinite(sl_distance)
-                    or not math.isfinite(entry)
-                    or not math.isfinite(sl)
-                    or risk_pct <= 0
-                ):
-                    continue
-
-                risk_amount = equity * (risk_pct / 100)
-                if risk_amount <= 0 or not math.isfinite(risk_amount):
-                    continue
-
-                lot_size = risk_amount / sl_distance
-                if lot_size <= 0 or not math.isfinite(lot_size):
-                    continue
-
-                tp = entry + (sl_distance * risk_reward) if is_long else entry - (sl_distance * risk_reward)
-
-                position = {
-                    "direction": "long" if is_long else "short",
-                    "entry_price": entry,
-                    "enter_time": candle.time_open,
-                    "stop_loss": sl,
-                    "take_profit": tp,
-                    "risk_distance": sl_distance,
-                    "lot_size": lot_size,
-                    "break_even_armed": False,
-                    "partial_tp_taken": False,
-                    "partial_tp_realized_pnl": 0.0,
-                }
+                pending_signal = signal
 
     if position and candles:
         last_candle = candles[-1]
-        is_long = position["direction"] == "long"
-        exit_price = last_candle.close
-        price_move = (exit_price - position["entry_price"]) if is_long else (position["entry_price"] - exit_price)
-        lot_size = max(position.get("lot_size", 0.0), 0.0)
-        partial_pnl = float(position.get("partial_tp_realized_pnl", 0.0) or 0.0)
-        pnl = (price_move * lot_size) + partial_pnl
-        risk_distance = max(position.get("risk_distance", 0.0), 1e-12)
-        r_multiple = price_move / risk_distance
-
-        trade = Trade(
-            enter_time=position["enter_time"],
-            enter_price=position["entry_price"],
-            direction=position["direction"],
-            exit_time=last_candle.time_open,
-            exit_price=exit_price,
-            pnl=pnl,
-            r_multiple=r_multiple,
-            partial_tp_taken=bool(position.get("partial_tp_taken", False)),
-            partial_tp_realized_pnl=partial_pnl,
-        )
-        equity += pnl
-        daily_pnl[last_candle.time_open.date()] += pnl
+        trade = _close_position(position, last_candle, last_candle.close, last_candle.time_open)
+        equity += trade.pnl
+        daily_pnl[last_candle.time_open.date()] += trade.pnl
         yield {"type": "trade", "trade": trade, "processed_candles": total, "total_candles": total}
 
     yield {"type": "done", "total_candles": total}

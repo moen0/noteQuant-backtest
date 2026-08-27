@@ -7,6 +7,7 @@ import {
 } from 'lightweight-charts';
 import { BacktestingTab } from './components/BacktestingTab';
 import { OptimizerTab } from './components/OptimizerTab';
+import { WalkForwardTab } from './components/WalkForwardTab';
 import { TradeHistory } from './components/TradeHistory';
 import { motion as Motion } from 'motion/react';
 
@@ -15,97 +16,41 @@ import { MetricCard } from './components/MetricCard';
 import { PerformanceBreakdown } from './components/PerformanceBreakdown';
 import { TradeDistribution } from './components/TradeDistribution';
 import appLogo from './assets/favicon.png';
+import { TIMEFRAMES, RR_OPTIONS, STARTING_BALANCE, CHART_THEME } from './constants';
+import { formatMoney, buildEquityCurve, buildTradeMarkers, calculateMaxDrawdown, calculateSharpeRatio } from './utils';
 
-const TIMEFRAMES = [
-  { label: '1m', value: 1 },
-  { label: '3m', value: 3 },
-  { label: '5m', value: 5 },
-  { label: '15m', value: 15 },
-  { label: '30m', value: 30 },
-  { label: '1H', value: 60 },
-];
-
-const RR_OPTIONS = [1, 1.5, 2, 2.5, 3];
-const STARTING_BALANCE = 10000;
 const DATASET_FALLBACKS = [
   { id: '2023gj.csv', label: '2023 GJ', default: true },
   { id: 'data1.csv', label: 'Data 1', default: false },
   { id: 'gbpjpy_mars.csv', label: 'Data 3', default: false },
 ];
 
-function formatMoney(value) {
-  return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function buildEquityCurve(trades) {
-  let equity = STARTING_BALANCE;
-  return trades
-    .slice()
-    .sort((a, b) => new Date(a.exit_time) - new Date(b.exit_time))
-    .map((trade) => {
-      equity += trade.pnl;
-      return {
-        date: new Date(trade.exit_time).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-        equity: Number(equity.toFixed(2)),
-      };
-    });
-}
-
 function buildMonthlyReturns(trades) {
   const buckets = new Map();
-  trades
+  let runningBalance = STARTING_BALANCE;
+  const sorted = trades
     .slice()
-    .sort((a, b) => new Date(a.exit_time) - new Date(b.exit_time))
-    .forEach((trade) => {
-      const date = new Date(trade.exit_time);
-      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-      if (!buckets.has(key)) {
-        buckets.set(key, { month: date.toLocaleDateString('en-US', { month: 'short' }), pnl: 0 });
-      }
-      buckets.get(key).pnl += trade.pnl;
-    });
+    .sort((a, b) => new Date(a.exit_time) - new Date(b.exit_time));
+
+  sorted.forEach((trade) => {
+    const date = new Date(trade.exit_time);
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    if (!buckets.has(key)) {
+      buckets.set(key, { month: date.toLocaleDateString('en-US', { month: 'short' }), pnl: 0, balanceAtStart: runningBalance });
+    }
+    buckets.get(key).pnl += trade.pnl;
+    runningBalance += trade.pnl;
+  });
+
   return Array.from(buckets.values()).map((entry) => ({
     month: entry.month,
-    returnPct: Number(((entry.pnl / STARTING_BALANCE) * 100).toFixed(1)),
+    returnPct: Number(((entry.pnl / entry.balanceAtStart) * 100).toFixed(1)),
   }));
-}
-
-function calculateMaxDrawdown(equityCurve) {
-  if (!equityCurve.length) return 0;
-  let peak = equityCurve[0].equity;
-  let maxDrawdown = 0;
-  equityCurve.forEach((point) => {
-    peak = Math.max(peak, point.equity);
-    const drawdown = ((point.equity - peak) / peak) * 100;
-    maxDrawdown = Math.min(maxDrawdown, drawdown);
-  });
-  return Number(maxDrawdown.toFixed(1));
-}
-
-function calculateSharpeRatio(trades) {
-  if (trades.length < 2) return 0;
-  const returns = trades.map((trade) => trade.pnl / STARTING_BALANCE);
-  const mean = returns.reduce((sum, v) => sum + v, 0) / returns.length;
-  const variance = returns.reduce((sum, v) => sum + (v - mean) ** 2, 0) / returns.length;
-  const stdDev = Math.sqrt(variance);
-  if (!stdDev) return 0;
-  return Number(((mean / stdDev) * Math.sqrt(trades.length)).toFixed(2));
 }
 
 function resolveDatasetLabel(datasets, selectedDataset) {
   return datasets.find((item) => item.id === selectedDataset)?.label ?? selectedDataset;
 }
-
-const CHART_THEME = {
-  layout: { background: { color: '#0a0a0a' }, textColor: '#737373', fontFamily: 'Inter, system-ui, sans-serif', fontSize: 11 },
-  grid: { vertLines: { color: '#1a1a1a' }, horzLines: { color: '#1a1a1a' } },
-  crosshair: {
-    vertLine: { color: 'rgba(250, 250, 250, 0.15)', labelBackgroundColor: '#262626' },
-    horzLine: { color: 'rgba(250, 250, 250, 0.15)', labelBackgroundColor: '#262626' },
-  },
-  rightPriceScale: { borderColor: '#262626', textColor: '#737373' },
-  timeScale: { borderColor: '#262626', timeVisible: true, secondsVisible: false },
-};
 
 export default function App() {
   const chartContainerRef = useRef(null);
@@ -241,13 +186,14 @@ export default function App() {
       candleSeriesRef.current?.setData(candles);
 
       const times = indicatorData.candle_times;
+      const unixTimes = times.map((t) => Math.floor(new Date(t).getTime() / 1000));
       const markers = [];
 
       if (indicators.structure) {
         indicatorData.structure.forEach((swing) => {
           if (swing.index < times.length) {
             markers.push({
-              time: Math.floor(new Date(times[swing.index]).getTime() / 1000),
+              time: unixTimes[swing.index],
               position: swing.type === 'high' ? 'aboveBar' : 'belowBar',
               color: swing.label === 'HH' || swing.label === 'HL' ? '#10b981' : '#ef4444',
               shape: swing.type === 'high' ? 'arrowDown' : 'arrowUp',
@@ -261,7 +207,7 @@ export default function App() {
         indicatorData.order_blocks.forEach((ob) => {
           if (ob.index < times.length) {
             markers.push({
-              time: Math.floor(new Date(times[ob.index]).getTime() / 1000),
+              time: unixTimes[ob.index],
               position: ob.type === 'bullish' ? 'belowBar' : 'aboveBar',
               color: ob.type === 'bullish' ? '#3b82f6' : '#f59e0b',
               shape: 'square',
@@ -275,7 +221,7 @@ export default function App() {
         indicatorData.fvgs.forEach((fvg) => {
           if (fvg.index < times.length) {
             markers.push({
-              time: Math.floor(new Date(times[fvg.index]).getTime() / 1000),
+              time: unixTimes[fvg.index],
               position: fvg.type === 'bullish' ? 'belowBar' : 'aboveBar',
               color: '#a855f7',
               shape: 'circle',
@@ -290,7 +236,7 @@ export default function App() {
           liq.indexes.forEach((index) => {
             if (index < times.length) {
               markers.push({
-                time: Math.floor(new Date(times[index]).getTime() / 1000),
+                time: unixTimes[index],
                 position: liq.type === 'equal_highs' ? 'aboveBar' : 'belowBar',
                 color: '#06b6d4',
                 shape: 'circle',
@@ -302,23 +248,7 @@ export default function App() {
       }
 
       if (backtestPayload?.trades) {
-        backtestPayload.trades.forEach((trade) => {
-          const isWin = trade.pnl > 0;
-          markers.push({
-            time: Math.floor(new Date(trade.enter_time).getTime() / 1000),
-            position: trade.direction === 'long' ? 'belowBar' : 'aboveBar',
-            color: isWin ? '#10b981' : '#ef4444',
-            shape: trade.direction === 'long' ? 'arrowUp' : 'arrowDown',
-            text: trade.direction === 'long' ? 'BUY' : 'SELL',
-          });
-          markers.push({
-            time: Math.floor(new Date(trade.exit_time).getTime() / 1000),
-            position: 'inBar',
-            color: isWin ? '#10b981' : '#ef4444',
-            shape: 'circle',
-            text: isWin ? `+${trade.pnl.toFixed(2)}` : trade.pnl.toFixed(2),
-          });
-        });
+        markers.push(...buildTradeMarkers(backtestPayload.trades));
       }
 
       markers.sort((a, b) => a.time - b.time);
@@ -327,12 +257,15 @@ export default function App() {
       chartRef.current?.timeScale().fitContent();
 
       if (backtestPayload?.trades?.length) {
-        const equityCurve = buildEquityCurve(backtestPayload.trades);
         const sortedTrades = backtestPayload.trades.slice().sort((a, b) => new Date(a.exit_time) - new Date(b.exit_time));
-        const equityData = equityCurve.map((point, index) => ({
-          time: Math.floor(new Date(sortedTrades[index].exit_time).getTime() / 1000),
-          value: point.equity,
-        }));
+        let equity = STARTING_BALANCE;
+        const equityData = sortedTrades.map((trade) => {
+          equity += trade.pnl;
+          return {
+            time: Math.floor(new Date(trade.exit_time).getTime() / 1000),
+            value: Number(equity.toFixed(2)),
+          };
+        });
         equitySeriesRef.current?.setData(equityData);
         equityChartObjRef.current?.timeScale().fitContent();
       } else {
@@ -350,7 +283,7 @@ export default function App() {
         setLoading(false);
       }
     }
-  }, [activeTab, backtestData, hasSharedBacktest, indicators, riskReward, selectedDataset, showBacktest, timeframe]);
+  }, [activeTab, hasSharedBacktest, indicators, riskReward, selectedDataset, showBacktest, timeframe]);
 
   useEffect(() => {
     setHasSharedBacktest(false);
@@ -530,6 +463,7 @@ export default function App() {
             { id: 'trade-history', label: 'Trade History' },
             { id: 'backtesting', label: 'Backtesting' },
             { id: 'optimizer', label: 'Optimizer' },
+            { id: 'walk-forward', label: 'Walk-Forward' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -759,6 +693,20 @@ export default function App() {
             animate={mounted ? 'visible' : 'hidden'}
           >
             <OptimizerTab
+              datasets={datasets}
+              selectedDataset={selectedDataset}
+              onDatasetChange={setSelectedDataset}
+            />
+          </Motion.div>
+        )}
+
+        {activeTab === 'walk-forward' && (
+          <Motion.div
+            variants={containerVariants}
+            initial="hidden"
+            animate={mounted ? 'visible' : 'hidden'}
+          >
+            <WalkForwardTab
               datasets={datasets}
               selectedDataset={selectedDataset}
               onDatasetChange={setSelectedDataset}

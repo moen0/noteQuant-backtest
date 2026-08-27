@@ -1,10 +1,8 @@
 from data.model import Signal
-from indicators.market_structure import find_swing_points, detect_structure
 from indicators.liquidity import find_liquidity_levels
-from indicators.fvg import find_fvgs
-from indicators.order_blocks import find_order_blocks
-from indicators.sessions import in_session, in_day_filter, get_asian_range, get_sessions_for_tz
+from indicators.sessions import in_session, in_day_filter, get_sessions_for_tz
 from collections import defaultdict
+from datetime import timedelta
 
 
 class ICTStrategy:
@@ -70,32 +68,202 @@ class ICTStrategy:
 
         self.recent_sweep = None
         self.sweep_expiry = 0
+        self._candles = ()
+        self._processed_index = -1
+        self._body_values = []
+        self._asian_pending = defaultdict(list)
+        self._asian_ranges_finalized = set()
 
     def prepare(self, candles):
-        self.swings = find_swing_points(candles, self.lookback)
-        self.structure = detect_structure(self.swings)
-        self.fvgs = find_fvgs(
-            candles,
-            min_gap_size=self.min_gap_size,
-            impulse_multiplier=self.impulse_multiplier,
-        )
-        self.order_blocks = find_order_blocks(
-            candles,
-            self.structure,
-            min_ob_size=self.min_ob_size,
-        )
+        """Reset causal state for a new run.
+
+        Indicators are deliberately not calculated here.  The backtester calls
+        ``check_signal`` in chronological order, and that method publishes only
+        events whose confirmation candle has already closed.
+        """
+        self._candles = tuple(candles)
+        self.swings = []
+        self.structure = []
+        self.fvgs = []
+        self.order_blocks = []
+        self.liquidity_levels = []
+        self.asian_ranges = {}
+        self.recent_sweep = None
+        self.sweep_expiry = 0
+        self._processed_index = -1
+        self._body_values = []
+        self._asian_pending = defaultdict(list)
+        self._asian_ranges_finalized = set()
+
+    def _asian_trading_date(self, candle):
+        start, end = self.sessions_map["asian"]
+        current = candle.time_open.time()
+        if start > end and current >= start:
+            return candle.time_open.date() + timedelta(days=1)
+        return candle.time_open.date()
+
+    def _finalize_asian_range(self, candle, index):
+        if "asian" not in self.sessions_map:
+            return
+
+        start, end = self.sessions_map["asian"]
+        current = candle.time_open.time()
+        trading_date = self._asian_trading_date(candle)
+
+        # A range is usable only after the Asian session has ended.  Overnight
+        # sessions end when the clock reaches ``end``; non-overnight sessions
+        # use the same rule.
+        session_has_ended = current >= end if start < end else end <= current < start
+        if not session_has_ended or trading_date in self._asian_ranges_finalized:
+            return
+
+        asian = self._asian_pending.get(trading_date, [])
+        if not asian:
+            return
+
+        high = max(c.high for c in asian)
+        low = min(c.low for c in asian)
+        self.asian_ranges[trading_date] = {
+            "high": high,
+            "low": low,
+            "mid": (high + low) / 2,
+            "available_index": index,
+        }
+        self._asian_ranges_finalized.add(trading_date)
+
+    def _publish_swing(self, event_index, available_index):
+        if event_index < self.lookback or event_index + self.lookback != available_index:
+            return
+
+        candles = self._candles
+        center = candles[event_index]
+        neighbors = candles[event_index - self.lookback:event_index + self.lookback + 1]
+        is_high = all(center.high > c.high for offset, c in enumerate(neighbors) if offset != self.lookback)
+        is_low = all(center.low < c.low for offset, c in enumerate(neighbors) if offset != self.lookback)
+
+        for swing_type, price, matches in (
+            ("high", center.high, is_high),
+            ("low", center.low, is_low),
+        ):
+            if not matches:
+                continue
+            swing = {
+                "index": event_index,
+                "event_index": event_index,
+                "available_index": available_index,
+                "price": price,
+                "type": swing_type,
+            }
+            self.swings.append(swing)
+            self._publish_structure(swing)
+
         self.liquidity_levels = find_liquidity_levels(self.swings)
 
-        daily = defaultdict(list)
-        for c in candles:
-            daily[c.time_open.date()].append(c)
-        for date, day_candles in daily.items():
-            ar = get_asian_range(day_candles, sessions_map=self.sessions_map)
-            if ar:
-                self.asian_ranges[date] = ar
+    def _publish_structure(self, swing):
+        prior = [s for s in self.swings if s["type"] == swing["type"] and s is not swing]
+        if not prior:
+            return
+
+        previous = prior[-1]
+        if swing["type"] == "high":
+            label = "HH" if swing["price"] > previous["price"] else "LH"
+        else:
+            label = "HL" if swing["price"] > previous["price"] else "LL"
+
+        structure = {**swing, "label": label}
+        self.structure.append(structure)
+        self._publish_order_block(structure)
+
+    def _publish_order_block(self, structure):
+        if structure["label"] not in ("HH", "LL"):
+            return
+
+        idx = structure["event_index"]
+        for j in range(idx - 1, max(idx - 20, 0), -1):
+            candle = self._candles[j]
+            if structure["label"] == "HH" and candle.close < candle.open:
+                size = candle.open - candle.close
+                if size >= self.min_ob_size:
+                    self.order_blocks.append({
+                        "index": j,
+                        "event_index": j,
+                        "available_index": structure["available_index"],
+                        "type": "bullish",
+                        "top": candle.open,
+                        "bottom": candle.close,
+                    })
+                break
+            if structure["label"] == "LL" and candle.close > candle.open:
+                size = candle.close - candle.open
+                if size >= self.min_ob_size:
+                    self.order_blocks.append({
+                        "index": j,
+                        "event_index": j,
+                        "available_index": structure["available_index"],
+                        "type": "bearish",
+                        "top": candle.close,
+                        "bottom": candle.open,
+                    })
+                break
+
+    def _update_causal_state(self, index):
+        if index <= self._processed_index:
+            return
+        if index >= len(self._candles):
+            raise IndexError("candle index is outside the prepared data")
+
+        for current_index in range(self._processed_index + 1, index + 1):
+            candle = self._candles[current_index]
+
+            if in_session(candle.time_open, "asian", sessions_map=self.sessions_map):
+                self._asian_pending[self._asian_trading_date(candle)].append(candle)
+            self._finalize_asian_range(candle, current_index)
+
+            # Existing gaps are updated with the current candle before a new
+            # three-candle gap is created.
+            for fvg in self.fvgs:
+                if fvg["mitigated_at"] is not None:
+                    continue
+                if fvg["type"] == "bullish" and candle.low <= fvg["bottom"]:
+                    fvg["mitigated_at"] = current_index
+                elif fvg["type"] == "bearish" and candle.high >= fvg["top"]:
+                    fvg["mitigated_at"] = current_index
+
+            if current_index >= 2:
+                c1, c2, c3 = self._candles[current_index - 2:current_index + 1]
+                impulse_ok = True
+                if self.impulse_multiplier > 0 and len(self._body_values) >= 2:
+                    prior_bodies = self._body_values[:-1]
+                    average = sum(prior_bodies[-20:]) / min(20, len(prior_bodies))
+                    impulse_ok = average <= 0 or abs(c2.close - c2.open) >= average * self.impulse_multiplier
+
+                if impulse_ok and c1.high < c3.low and c3.low - c1.high >= self.min_gap_size:
+                    self.fvgs.append({
+                        "index": current_index - 1,
+                        "event_index": current_index - 1,
+                        "available_index": current_index,
+                        "type": "bullish",
+                        "top": c3.low,
+                        "bottom": c1.high,
+                        "mitigated_at": None,
+                    })
+                elif impulse_ok and c1.low > c3.high and c1.low - c3.high >= self.min_gap_size:
+                    self.fvgs.append({
+                        "index": current_index - 1,
+                        "event_index": current_index - 1,
+                        "available_index": current_index,
+                        "type": "bearish",
+                        "top": c1.low,
+                        "bottom": c3.high,
+                        "mitigated_at": None,
+                    })
+
+            self._body_values.append(abs(candle.close - candle.open))
+            self._publish_swing(current_index - self.lookback, current_index)
+            self._processed_index = current_index
 
     def get_bias(self, index):
-        recent = [s for s in self.structure if s["index"] < index]
+        recent = [s for s in self.structure if s.get("available_index", s["index"]) <= index]
         if len(recent) < 2:
             return None
 
@@ -122,7 +290,7 @@ class ICTStrategy:
         target_type = "low" if direction == "BUY" else "high"
 
         for swing in reversed(self.swings):
-            if swing["index"] >= index:
+            if swing.get("available_index", swing["index"]) > index:
                 continue
             if swing["type"] != target_type:
                 continue
@@ -136,17 +304,29 @@ class ICTStrategy:
                 if sl > candle.close:
                     return sl
 
-        # Fallback
-        bracket = (candle.high - candle.low) * self.atr_mult
+        # Fallback to a causal ATR calculated from candles through the signal
+        # candle.  The old implementation used only this candle's range while
+        # calling the parameter an ATR multiplier.
+        ranges = []
+        for current_index in range(max(0, index - 13), index + 1):
+            current = self._candles[current_index]
+            previous_close = self._candles[current_index - 1].close if current_index else current.open
+            ranges.append(max(
+                current.high - current.low,
+                abs(current.high - previous_close),
+                abs(current.low - previous_close),
+            ))
+        atr = sum(ranges) / len(ranges) if ranges else candle.high - candle.low
+        bracket = atr * self.atr_mult
         if direction == "BUY":
             return candle.close - bracket
         return candle.close + bracket
 
     def _has_recent_bos(self, index, direction):
         for s in reversed(self.structure):
-            if s["index"] >= index:
+            if s.get("available_index", s["index"]) > index:
                 continue
-            if s["index"] < index - 20:
+            if s.get("available_index", s["index"]) < index - 20:
                 break
             if direction == "bullish" and s["label"] == "HH":
                 return True
@@ -158,7 +338,7 @@ class ICTStrategy:
         today = candle.time_open.date()
         ar = self.asian_ranges.get(today)
 
-        if ar:
+        if ar and ar.get("available_index", index) <= index:
             if candle.high > ar["high"] and candle.close < ar["high"]:
                 return "swept_high"
             if candle.low < ar["low"] and candle.close > ar["low"]:
@@ -168,6 +348,8 @@ class ICTStrategy:
             return None
 
         for level in self.liquidity_levels:
+            if not level.get("indexes") or max(level["indexes"]) >= index:
+                continue
             if level["type"] == "equal_highs":
                 if candle.high > level["price"] and candle.close < level["price"]:
                     return "swept_high"
@@ -179,28 +361,36 @@ class ICTStrategy:
 
     def in_ob_zone(self, price, index):
         for ob in self.order_blocks:
+            if ob.get("available_index", index) > index:
+                continue
             age = index - ob["index"]
             if 0 < age < self.ob_max_age:
                 size = ob["top"] - ob["bottom"]
-                buffer = max(size * 2, 0.05)
+                buffer = max(size * self.proximity_pct, 0.0)
                 if (ob["bottom"] - buffer) <= price <= (ob["top"] + buffer):
                     return ob["type"]
         return None
 
     def in_fvg_zone(self, price, index):
         for fvg in self.fvgs:
+            if fvg.get("available_index", index) > index:
+                continue
             age = index - fvg["index"]
             if 0 < age < self.ob_max_age:
-                if self.require_unmitigated_fvg and fvg.get("mitigated", False):
+                if self.require_unmitigated_fvg and fvg.get("mitigated_at") is not None:
                     continue
                 size = fvg["top"] - fvg["bottom"]
-                buffer = max(size * 2, 0.05)
+                buffer = max(size * self.proximity_pct, 0.0)
                 if (fvg["bottom"] - buffer) <= price <= (fvg["top"] + buffer):
                     return fvg["type"]
         return None
 
     def check_signal(self, candles, index):
         """Returns Signal or None."""
+        if not self._candles or tuple(candles) != self._candles:
+            self.prepare(candles)
+        self._update_causal_state(index)
+
         if index < 4:
             return None
 
