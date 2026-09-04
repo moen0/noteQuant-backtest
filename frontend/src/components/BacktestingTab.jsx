@@ -6,9 +6,11 @@ import {
   createChart,
   createSeriesMarkers,
 } from 'lightweight-charts';
-import { TIMEFRAMES, RR_OPTIONS, STARTING_BALANCE, CHART_THEME } from '../constants';
+import { API_BASE_URL, TIMEFRAMES, RR_OPTIONS, STARTING_BALANCE, CHART_THEME } from '../constants';
 import { formatMoney, buildTradeMarkers, calculateProfitFactor, calculateMaxDrawdownFromTrades } from '../utils';
 import { NumberInput } from './NumberInput';
+import { appendRun, upsertStrategy, markStrategyRun } from '../design/storage';
+import { Label, Button, MetricFrieze, Sweep, DataRow, TabPills } from '../design/Primitives';
 const SESSIONS = ['london', 'new_york', 'asian', 'london_close', 'london_ny_overlap', 'all'];
 const DAYS = [
   { label: 'Mon', value: 0 },
@@ -45,15 +47,15 @@ function saveRecentResults(results) {
   localStorage.setItem(RESULT_HISTORY_KEY, JSON.stringify(results.slice(0, RESULT_HISTORY_LIMIT)));
 }
 
-function ToggleInput({ label, value, onChange, color = '#10b981' }) {
+function ToggleInput({ label, value, onChange }) {
   return (
       <button
-          className={`flex items-center gap-2 px-3 py-2 text-[12px] font-mono border transition-colors ${
-              value ? 'border-[#404040] text-[#fafafa]' : 'border-[#262626] text-[#525252]'
+          className={`flex items-center gap-3 px-3 py-2 text-[11px] uppercase tracking-[0.14em] transition-colors ${
+              value ? 'text-[#FAFAFA]' : 'text-[#525252] hover:text-[#A3A3A3]'
           }`}
           onClick={() => onChange(!value)}
       >
-        <span className="w-1.5 h-1.5" style={{ background: value ? color : '#525252' }} />
+        <span className={`w-2 h-2 border ${value ? 'bg-[#FAFAFA] border-[#FAFAFA]' : 'border-[#404040]'}`} />
         {label}
       </button>
   );
@@ -61,10 +63,28 @@ function ToggleInput({ label, value, onChange, color = '#10b981' }) {
 
 function SectionHeader({ title, subtitle }) {
   return (
-      <div className="mb-4 mt-2">
-        <h3 className="text-[14px] font-semibold tracking-tight">{title}</h3>
-        {subtitle && <p className="text-[11px] text-[#525252] font-mono mt-0.5">{subtitle}</p>}
+      <div className="mb-6 pb-3 border-b border-[#141414]">
+        <Label>{title}</Label>
+        {subtitle && <p className="text-[11px] text-[#737373] font-mono mt-2">{subtitle}</p>}
       </div>
+  );
+}
+
+function SegmentButton({ options, value, onChange }) {
+  return (
+    <div className="flex gap-4">
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          onClick={() => onChange(opt.value)}
+          className={`text-[12px] font-mono transition-colors capitalize ${
+            value === opt.value ? 'text-[#FAFAFA]' : 'text-[#525252] hover:text-[#A3A3A3]'
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -78,6 +98,8 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
   const markersRef = useRef(null);
   const progressIntervalRef = useRef(null);
   const progressResetTimeoutRef = useRef(null);
+  const eventSourceRef = useRef(null);
+  const streamedTradesRef = useRef([]);
 
   const [chartsReady, setChartsReady] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -301,135 +323,155 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
       window.removeEventListener('resize', handleResize);
       chart.remove();
       equityChartObjRef.current?.remove();
+      eventSourceRef.current?.close();
     };
   }, []);
 
   const runBacktest = useCallback(async () => {
     if (!chartsReady) return;
 
-    if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
-    if (progressResetTimeoutRef.current) clearTimeout(progressResetTimeoutRef.current);
-    setProgressPct(8);
-    progressIntervalRef.current = setInterval(() => {
-      setProgressPct((prev) => (prev < 92 ? prev + 3 : prev));
-    }, 140);
-
-    setLoading(true);
-
-    try {
-      const params = new URLSearchParams({
-        timeframe: timeframe.toString(),
-        rr: riskReward.toString(),
-        lookback: lookback.toString(),
-        atr_mult: atrMult.toString(),
-        session,
-        sweep: useLiquiditySweep.toString(),
-        sweep_lookback: sweepLookback.toString(),
-        ob_age: obMaxAge.toString(),
-        dataset: selectedDataset,
-        use_fvg: useFvg.toString(),
-        use_ob: useOb.toString(),
-        proximity_pct: proximityPct.toString(),
-        min_gap_size: minGapSize.toString(),
-        impulse_multiplier: impulseMultiplier.toString(),
-        require_unmitigated_fvg: requireUnmitigatedFvg.toString(),
-        require_bos_confluence: requireBosConfluence.toString(),
-        min_ob_size: minObSize.toString(),
-        require_fvg_ob_confluence: requireFvgObConfluence.toString(),
-        asian_sweep_only: asianSweepOnly.toString(),
-        use_break_even: useBreakEven.toString(),
-        be_trigger_rr: beTriggerRr.toString(),
-        use_partial_tp: usePartialTp.toString(),
-        partial_tp_rr: partialTpRr.toString(),
-        partial_tp_percent: partialTpPercent.toString(),
-        day_filter: dayFilter.join(','),
-        max_daily_loss: maxDailyLoss.toString(),
-        max_consecutive_losses: maxConsecutiveLosses.toString(),
-        intrabar_policy: intrabarPolicy,
-        slippage: slippage.toString(),
-        spread: spread.toString(),
-      });
-
-      const [candleRes, backtestRes] = await Promise.all([
-        fetch(`http://localhost:8000/api/candles?timeframe=${timeframe}&dataset=${encodeURIComponent(selectedDataset)}`),
-        fetch(`http://localhost:8000/api/backtest?${params}`),
-      ]);
-
-      const candleData = await candleRes.json();
-      const backtestData = await backtestRes.json();
-
-      const candles = candleData.candles.map((c) => ({
-        time: Math.floor(new Date(c.time).getTime() / 1000),
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-      }));
-      candleSeriesRef.current?.setData(candles);
-
-      const markers = buildTradeMarkers(backtestData.trades || []);
-
-      markers.sort((a, b) => a.time - b.time);
-      markersRef.current?.setMarkers([]);
-      markersRef.current = createSeriesMarkers(candleSeriesRef.current, markers);
-      chartRef.current?.timeScale().fitContent();
-
-      if (backtestData.trades?.length) {
-        let equity = STARTING_BALANCE;
-        const sortedTrades = backtestData.trades.slice().sort((a, b) => new Date(a.exit_time) - new Date(b.exit_time));
-        const eqData = sortedTrades.map((t) => {
-          equity += t.pnl;
-          return {
-            time: Math.floor(new Date(t.exit_time).getTime() / 1000),
-            value: Number(equity.toFixed(2)),
-          };
-        });
-        equitySeriesRef.current?.setData(eqData);
-        equityChartObjRef.current?.timeScale().fitContent();
-      } else {
-        equitySeriesRef.current?.setData([]);
-      }
-
-      setResults(backtestData);
-      onBacktestComplete?.(backtestData);
-
-      if (backtestData?.stats) {
-        const snapshotSettings = {
-          ...getSettings(),
-          dayFilter: [...dayFilter],
-        };
-        const snapshot = {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          runAt: new Date().toISOString(),
-          dataset: selectedDataset,
-          presetName: activePresetName,
-          timeframe,
-          riskReward,
-          settings: snapshotSettings,
-          queryParameters: Object.fromEntries(params.entries()),
-          totalPnl: Number(backtestData.stats.total_pnl ?? 0),
-          winRate: Number(backtestData.stats.win_rate ?? 0),
-          totalTrades: Number(backtestData.stats.total_trades ?? 0),
-        };
-        setRecentResults((prev) => {
-          const next = [snapshot, ...prev].slice(0, RESULT_HISTORY_LIMIT);
-          saveRecentResults(next);
-          return next;
-        });
-      }
-    } catch (err) {
-      console.error('Backtest failed:', err);
-    } finally {
-      if (progressIntervalRef.current) {
-        clearInterval(progressIntervalRef.current);
-        progressIntervalRef.current = null;
-      }
-      setProgressPct(100);
-      setLoading(false);
-      progressResetTimeoutRef.current = setTimeout(() => {
-        setProgressPct(0);
-      }, 500);
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
+    if (progressResetTimeoutRef.current) clearTimeout(progressResetTimeoutRef.current);
+
+    setProgressPct(0);
+    setLoading(true);
+    streamedTradesRef.current = [];
+    markersRef.current?.setMarkers([]);
+    equitySeriesRef.current?.setData([]);
+
+    const params = new URLSearchParams({
+      timeframe: timeframe.toString(),
+      rr: riskReward.toString(),
+      lookback: lookback.toString(),
+      atr_mult: atrMult.toString(),
+      session,
+      sweep: useLiquiditySweep.toString(),
+      sweep_lookback: sweepLookback.toString(),
+      ob_age: obMaxAge.toString(),
+      dataset: selectedDataset,
+      use_fvg: useFvg.toString(),
+      use_ob: useOb.toString(),
+      proximity_pct: proximityPct.toString(),
+      min_gap_size: minGapSize.toString(),
+      impulse_multiplier: impulseMultiplier.toString(),
+      require_unmitigated_fvg: requireUnmitigatedFvg.toString(),
+      require_bos_confluence: requireBosConfluence.toString(),
+      min_ob_size: minObSize.toString(),
+      require_fvg_ob_confluence: requireFvgObConfluence.toString(),
+      asian_sweep_only: asianSweepOnly.toString(),
+      use_break_even: useBreakEven.toString(),
+      be_trigger_rr: beTriggerRr.toString(),
+      use_partial_tp: usePartialTp.toString(),
+      partial_tp_rr: partialTpRr.toString(),
+      partial_tp_percent: partialTpPercent.toString(),
+      day_filter: dayFilter.join(','),
+      max_daily_loss: maxDailyLoss.toString(),
+      max_consecutive_losses: maxConsecutiveLosses.toString(),
+      intrabar_policy: intrabarPolicy,
+      slippage: slippage.toString(),
+      spread: spread.toString(),
+    });
+
+    const streamUrl = `${API_BASE_URL}/api/backtest/stream?${params}`;
+    const es = new EventSource(streamUrl);
+    eventSourceRef.current = es;
+
+    fetch(`${API_BASE_URL}/api/candles?timeframe=${timeframe}&dataset=${encodeURIComponent(selectedDataset)}`)
+      .then((res) => res.json())
+      .then((candleData) => {
+        const candles = candleData.candles.map((c) => ({
+          time: Math.floor(new Date(c.time).getTime() / 1000),
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        }));
+        candleSeriesRef.current?.setData(candles);
+        chartRef.current?.timeScale().fitContent();
+      })
+      .catch((err) => console.error('Failed to load candles:', err));
+
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+
+        if (data.type === 'progress') {
+          setProgressPct(data.progress_pct || 0);
+        } else if (data.type === 'trade') {
+          const trade = data.trade;
+          streamedTradesRef.current.push(trade);
+
+          const markers = buildTradeMarkers(streamedTradesRef.current);
+          markers.sort((a, b) => a.time - b.time);
+          markersRef.current?.setMarkers([]);
+          markersRef.current = createSeriesMarkers(candleSeriesRef.current, markers);
+
+          const sortedTrades = streamedTradesRef.current.slice().sort((a, b) => new Date(a.exit_time) - new Date(b.exit_time));
+          let eq = STARTING_BALANCE;
+          const eqData = sortedTrades.map((t) => {
+            eq += t.pnl;
+            return { time: Math.floor(new Date(t.exit_time).getTime() / 1000), value: Number(eq.toFixed(2)) };
+          });
+          equitySeriesRef.current?.setData(eqData);
+
+          setResults({ trades: streamedTradesRef.current, stats: data.stats });
+        } else if (data.type === 'done') {
+          es.close();
+          eventSourceRef.current = null;
+
+          const backtestData = { trades: data.trades, stats: data.stats, overfitting: data.overfitting };
+          setResults(backtestData);
+          onBacktestComplete?.(backtestData);
+
+          if (data.stats) {
+            const snapshotSettings = { ...getSettings(), dayFilter: [...dayFilter] };
+            const snapshot = {
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              runAt: new Date().toISOString(),
+              dataset: selectedDataset,
+              presetName: activePresetName,
+              strategyName: activePresetName,
+              timeframe,
+              riskReward,
+              settings: snapshotSettings,
+              queryParameters: Object.fromEntries(params.entries()),
+              totalPnl: Number(data.stats.total_pnl ?? 0),
+              winRate: Number(data.stats.win_rate ?? 0),
+              totalTrades: Number(data.stats.total_trades ?? 0),
+              stats: data.stats,
+              trades: data.trades,
+            };
+            setRecentResults((prev) => {
+              const next = [snapshot, ...prev].slice(0, RESULT_HISTORY_LIMIT);
+              saveRecentResults(next);
+              return next;
+            });
+            appendRun(snapshot);
+            if (activePresetName && activePresetName !== DEFAULT_PRESET_NAME) {
+              upsertStrategy({ name: activePresetName, settings: snapshotSettings });
+              markStrategyRun(activePresetName);
+            }
+          }
+
+          setProgressPct(100);
+          setLoading(false);
+          progressResetTimeoutRef.current = setTimeout(() => setProgressPct(0), 500);
+        }
+      } catch (err) {
+        console.error('Error parsing SSE event:', err);
+      }
+    };
+
+    es.onerror = () => {
+      es.close();
+      eventSourceRef.current = null;
+      setLoading(false);
+      setProgressPct(0);
+      console.error('Backtest stream error');
+    };
   }, [
     chartsReady, timeframe, riskReward, lookback, atrMult, session,
     useFvg, useOb, useLiquiditySweep, sweepLookback, obMaxAge,
@@ -459,7 +501,7 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
     setMcResult(null);
 
     try {
-      const response = await fetch('http://localhost:8000/api/backtest/monte-carlo', {
+      const response = await fetch(`${API_BASE_URL}/api/backtest/monte-carlo`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -546,104 +588,86 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
   };
 
   return (
-      <div className="space-y-6">
-        <Motion.div variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
-          {/* Header row */}
-          <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
+      <div className="space-y-16">
+        <Motion.div variants={itemVariants}>
+          <div className="flex items-start justify-between gap-6 mb-10 flex-wrap">
             <div>
-              <h2 className="text-[20px] font-semibold tracking-tight mb-1">Backtesting Engine</h2>
-              <p className="text-[13px] text-[#525252] font-mono">Adjust parameters and run strategy</p>
+              <Label>Workspace</Label>
+              <h1 className="text-[36px] leading-[1.1] font-light tracking-[-0.02em] mt-3">
+                Backtest
+              </h1>
+              <p className="text-[12px] text-[#737373] mt-3">
+                Configure the strategy and execute a single run · trades stream live
+              </p>
             </div>
-            <div className="flex items-center gap-3 flex-wrap">
-              <ToggleInput label="Auto Run" value={autoRun} onChange={setAutoRun} color="#fafafa" />
-              {loading && <div className="w-2 h-2 bg-[#10b981] animate-pulse" />}
-              <button
-                  onClick={() => setShowPresets((p) => !p)}
-                  className="px-4 py-2 text-[13px] font-mono border border-[#262626] text-[#737373] hover:text-[#fafafa] hover:border-[#404040] transition-colors"
+            <div className="flex items-center gap-6">
+              <ToggleInput label="Auto Run" value={autoRun} onChange={setAutoRun} />
+              <Button variant="ghost" onClick={() => setShowPresets((p) => !p)}>Presets</Button>
+              <Button
+                variant="outline"
+                onClick={runMonteCarlo}
+                disabled={loading || mcLoading || !results?.trades?.length}
               >
-                Presets
-              </button>
-              <button
-                  onClick={runBacktest}
-                  disabled={loading}
-                  className="px-5 py-2 text-[13px] font-semibold font-mono bg-[#fafafa] text-black hover:bg-[#e5e5e5] transition-colors disabled:opacity-40"
-              >
-                {loading ? 'Running...' : 'Run Backtest'}
-              </button>
-              <button
-                  onClick={runMonteCarlo}
-                  disabled={loading || mcLoading || !results?.trades?.length}
-                  className="px-5 py-2 text-[13px] font-semibold font-mono border border-[#6366f1] text-[#6366f1] hover:bg-[#6366f1] hover:text-white transition-colors disabled:opacity-40"
-              >
-                {mcLoading ? 'Running MC...' : 'Monte Carlo'}
-              </button>
+                {mcLoading ? 'Running MC…' : 'Monte Carlo'}
+              </Button>
+              <Button variant="primary" onClick={runBacktest} disabled={loading}>
+                {loading ? 'Running…' : 'Run Backtest'}
+              </Button>
             </div>
           </div>
 
-          <div className="mb-6">
-            <div className="flex items-center justify-between text-[11px] font-mono text-[#737373] mb-1">
-              <span>{loading ? 'Running backtest...' : 'Backtest progress'}</span>
-              <span>{Math.round(progressPct)}%</span>
+          <div className="mb-10">
+            <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.18em] text-[#525252] mb-2">
+              <span>{loading ? 'Running backtest' : 'Ready'}</span>
+              <span className="font-mono text-[#737373] tabular-nums">{Math.round(progressPct)}%</span>
             </div>
-            <div className="h-2 border border-[#1f1f1f] bg-black/50 overflow-hidden">
+            <div className="h-px bg-[#141414] relative overflow-hidden">
               <div
-                className={`h-full transition-all duration-150 ${loading ? 'bg-[#10b981]' : 'bg-[#404040]'}`}
+                className="h-full bg-[#FAFAFA] transition-all duration-150"
                 style={{ width: `${progressPct}%` }}
               />
             </div>
+            {loading && <div className="mt-2"><Sweep active /></div>}
           </div>
 
-          {/* Presets panel */}
           {showPresets && (
-              <div className="mb-6 p-5 border border-[#262626] bg-black">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-[14px] font-semibold tracking-tight">Presets</h3>
+              <div className="mb-10 pt-8 border-t border-[#141414]">
+                <div className="flex items-center justify-between mb-6">
+                  <Label>Presets</Label>
                   <button
                       onClick={() => setShowPresets(false)}
-                      className="text-[#525252] hover:text-[#fafafa] text-[18px] leading-none transition-colors"
+                      className="text-[10px] uppercase tracking-[0.18em] text-[#525252] hover:text-[#FAFAFA]"
                   >
-                    x
+                    Close
                   </button>
                 </div>
 
-                {/* Save */}
-                <div className="flex gap-2 mb-4">
+                <div className="flex gap-4 mb-6 items-end">
                   <input
                       type="text"
-                      placeholder="Preset name..."
+                      placeholder="Name a preset…"
                       value={presetName}
                       onChange={(e) => setPresetName(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && handleSavePreset()}
-                      className="flex-1 border border-[#262626] bg-[#0a0a0a] text-[#fafafa] font-mono text-[13px] px-3 py-2 outline-none focus:border-[#404040] transition-colors"
+                      className="flex-1 bg-transparent border-b border-[#262626] text-[13px] text-[#FAFAFA] py-2 outline-none focus:border-[#525252] placeholder:text-[#404040]"
                   />
-                  <button
-                      onClick={handleSavePreset}
-                      disabled={!presetName.trim()}
-                      className="px-4 py-2 text-[13px] font-mono bg-[#fafafa] text-black hover:bg-[#e5e5e5] transition-colors disabled:opacity-30"
-                  >
+                  <Button variant="outline" onClick={handleSavePreset} disabled={!presetName.trim()}>
                     Save Current
-                  </button>
+                  </Button>
                 </div>
 
-                {/* List */}
                 {presetNames.length === 0 ? (
-                    <p className="text-[13px] text-[#525252] font-mono">No saved presets yet.</p>
+                    <p className="text-[12px] text-[#525252]">No saved presets yet.</p>
                 ) : (
-                    <div className="space-y-2">
+                    <div>
                       {presetNames.map((name) => (
-                          <div key={name} className="flex items-center justify-between p-3 border border-[#1a1a1a] hover:border-[#262626] transition-colors">
-                            <span className="text-[13px] font-mono text-[#fafafa]">{name}</span>
-                            <div className="flex gap-2">
-                              <button
-                                  onClick={() => handleLoadPreset(name)}
-                                  className="px-3 py-1 text-[12px] font-mono border border-[#262626] text-[#737373] hover:text-[#fafafa] hover:border-[#404040] transition-colors"
-                              >
+                          <div key={name} className="flex items-center justify-between py-3 border-b border-[#141414]">
+                            <span className="text-[13px] text-[#FAFAFA]">{name}</span>
+                            <div className="flex gap-4">
+                              <button onClick={() => handleLoadPreset(name)} className="text-[10px] uppercase tracking-[0.18em] text-[#737373] hover:text-[#FAFAFA]">
                                 Load
                               </button>
-                              <button
-                                  onClick={() => handleDeletePreset(name)}
-                                  className="px-3 py-1 text-[12px] font-mono border border-[#262626] text-[#ef4444] hover:border-[#ef4444] transition-colors"
-                              >
+                              <button onClick={() => handleDeletePreset(name)} className="text-[10px] uppercase tracking-[0.18em] text-[#404040] hover:text-[#FAFAFA]">
                                 Delete
                               </button>
                             </div>
@@ -654,36 +678,39 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
               </div>
           )}
 
-          {/* Core Strategy */}
           <SectionHeader title="Core Strategy" />
-          <div className="flex flex-wrap gap-6 items-end mb-6">
-            <div className="flex flex-col gap-1.5">
-              <span className="text-[11px] text-[#525252] font-mono uppercase tracking-widest">Timeframe</span>
-              <div className="flex border border-[#262626]">
-                {TIMEFRAMES.map((tf) => (
-                    <button key={tf.value} className={`px-3 py-1.5 text-[12px] font-mono transition-colors ${timeframe === tf.value ? 'bg-[#fafafa] text-black' : 'text-[#737373] hover:text-[#fafafa]'}`} onClick={() => setTimeframe(tf.value)}>{tf.label}</button>
-                ))}
-              </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-16 gap-y-6 mb-10">
+            <div className="flex items-center justify-between">
+              <Label>Timeframe</Label>
+              <SegmentButton
+                options={TIMEFRAMES.map((tf) => ({ label: tf.label, value: tf.value }))}
+                value={timeframe}
+                onChange={setTimeframe}
+              />
             </div>
-            <div className="flex flex-col gap-1.5">
-              <span className="text-[11px] text-[#525252] font-mono uppercase tracking-widest">Risk : Reward</span>
-              <div className="flex border border-[#262626]">
-                {RR_OPTIONS.map((rr) => (
-                    <button key={rr} className={`px-3 py-1.5 text-[12px] font-mono transition-colors ${riskReward === rr ? 'bg-[#fafafa] text-black' : 'text-[#737373] hover:text-[#fafafa]'}`} onClick={() => setRiskReward(rr)}>1:{rr}</button>
-                ))}
-              </div>
+            <div className="flex items-center justify-between">
+              <Label>Risk : Reward</Label>
+              <SegmentButton
+                options={RR_OPTIONS.map((rr) => ({ label: `1:${rr}`, value: rr }))}
+                value={riskReward}
+                onChange={setRiskReward}
+              />
             </div>
-            <div className="flex flex-col gap-1.5">
-              <span className="text-[11px] text-[#525252] font-mono uppercase tracking-widest">Session</span>
-              <div className="flex flex-wrap border border-[#262626]">
-                {SESSIONS.map((s) => (
-                    <button key={s} className={`px-3 py-1.5 text-[12px] font-mono transition-colors capitalize ${session === s ? 'bg-[#fafafa] text-black' : 'text-[#737373] hover:text-[#fafafa]'}`} onClick={() => setSession(s)}>{s.replace(/_/g, ' ')}</button>
-                ))}
-              </div>
+            <div className="flex items-center justify-between col-span-1 md:col-span-2">
+              <Label>Session</Label>
+              <SegmentButton
+                options={SESSIONS.map((s) => ({ label: s.replace(/_/g, ' '), value: s }))}
+                value={session}
+                onChange={setSession}
+              />
             </div>
-            <div className="flex flex-col gap-1.5">
-              <span className="text-[11px] text-[#525252] font-mono uppercase tracking-widest">Dataset</span>
-              <select className="border border-[#262626] bg-black text-[#fafafa] font-mono text-[13px] px-3 py-2 outline-none focus:border-[#404040] transition-colors" value={selectedDataset} onChange={(e) => onDatasetChange(e.target.value)}>
+            <div className="flex items-center justify-between">
+              <Label>Dataset</Label>
+              <select
+                className="bg-transparent border-b border-[#262626] text-[13px] text-[#FAFAFA] py-1 outline-none focus:border-[#525252]"
+                value={selectedDataset}
+                onChange={(e) => onDatasetChange(e.target.value)}
+              >
                 {datasets.map((d) => (<option key={d.id} value={d.id}>{d.label}</option>))}
               </select>
             </div>
@@ -696,7 +723,7 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
             <NumberInput label="Sweep Lookback" value={sweepLookback} onChange={setSweepLookback} min={1} max={50} />
           </div>
 
-          <div className="border-t border-[#1a1a1a] my-6" />
+          <div className="mt-12 mb-10" />
           <SectionHeader title="FVG Settings" subtitle="Fair Value Gap quality filters" />
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 mb-4">
             <NumberInput label="Min Gap Size" value={minGapSize} onChange={setMinGapSize} min={0} max={0.01} step={0.0001} />
@@ -708,7 +735,7 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
             <ToggleInput label="Require BOS Confluence" value={requireBosConfluence} onChange={setRequireBosConfluence} />
           </div>
 
-          <div className="border-t border-[#1a1a1a] my-6" />
+          <div className="mt-12 mb-10" />
           <SectionHeader title="Order Block Settings" subtitle="Order block quality filters" />
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 mb-4">
             <NumberInput label="Min OB Size" value={minObSize} onChange={setMinObSize} min={0} max={0.01} step={0.0001} />
@@ -718,22 +745,30 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
             <ToggleInput label="Require FVG + OB Confluence" value={requireFvgObConfluence} onChange={setRequireFvgObConfluence} />
           </div>
 
-          <div className="border-t border-[#1a1a1a] my-6" />
+          <div className="mt-12 mb-10" />
           <SectionHeader title="Liquidity Settings" subtitle="Sweep and liquidity filters" />
           <div className="flex flex-wrap gap-3 mb-6">
             <ToggleInput label="Liquidity Sweep" value={useLiquiditySweep} onChange={setUseLiquiditySweep} />
             <ToggleInput label="Asian Range Sweep Only" value={asianSweepOnly} onChange={setAsianSweepOnly} />
           </div>
 
-          <div className="border-t border-[#1a1a1a] my-6" />
+          <div className="mt-12 mb-10" />
           <SectionHeader title="Day Filter" subtitle="Select which days to trade" />
-          <div className="flex gap-2 mb-6">
+          <div className="flex gap-6 mb-10">
             {DAYS.map((d) => (
-                <button key={d.value} className={`px-4 py-2 text-[12px] font-mono border transition-colors ${dayFilter.includes(d.value) ? 'bg-[#fafafa] text-black border-[#fafafa]' : 'border-[#262626] text-[#525252] hover:text-[#fafafa]'}`} onClick={() => toggleDay(d.value)}>{d.label}</button>
+                <button
+                    key={d.value}
+                    onClick={() => toggleDay(d.value)}
+                    className={`text-[12px] font-mono transition-colors ${
+                        dayFilter.includes(d.value) ? 'text-[#FAFAFA]' : 'text-[#525252] hover:text-[#A3A3A3]'
+                    }`}
+                >
+                    {d.label}
+                </button>
             ))}
           </div>
 
-          <div className="border-t border-[#1a1a1a] my-6" />
+          <div className="mt-12 mb-10" />
           <SectionHeader title="Risk Management" subtitle="Daily loss limits and streak protection" />
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
             <NumberInput label="Max Daily Loss %" value={maxDailyLoss} onChange={setMaxDailyLoss} min={0} max={10} step={0.5} />
@@ -747,80 +782,94 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
             <ToggleInput label="Use Partial TP" value={usePartialTp} onChange={setUsePartialTp} />
           </div>
 
-          <div className="border-t border-[#1a1a1a] my-6" />
+          <div className="mt-12 mb-10" />
           <SectionHeader title="Execution Realism" subtitle="Slippage, spread, and fill policy" />
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 mb-4">
             <NumberInput label="Slippage (pips)" value={slippage} onChange={setSlippage} min={0} max={0.005} step={0.0001} />
             <NumberInput label="Spread (pips)" value={spread} onChange={setSpread} min={0} max={0.005} step={0.0001} />
           </div>
-          <div className="flex flex-wrap gap-3 mb-6">
-            <span className="text-[11px] text-[#525252] font-mono uppercase tracking-widest self-center mr-2">Intrabar Policy</span>
-            {[
-              { value: 'stop_first', label: 'Stop First' },
-              { value: 'target_first', label: 'Target First' },
-              { value: 'ohlc_path', label: 'OHLC Path' },
-            ].map((policy) => (
-              <button
-                key={policy.value}
-                className={`px-3 py-1.5 text-[12px] font-mono border transition-colors ${
-                  intrabarPolicy === policy.value
-                    ? 'border-[#404040] text-[#fafafa] bg-[#1a1a1a]'
-                    : 'border-[#262626] text-[#525252] hover:text-[#fafafa]'
-                }`}
-                onClick={() => setIntrabarPolicy(policy.value)}
-              >
-                {policy.label}
-              </button>
-            ))}
+          <div className="flex items-center gap-8 mb-10">
+            <Label>Intrabar Policy</Label>
+            <SegmentButton
+              options={[
+                { value: 'stop_first', label: 'Stop First' },
+                { value: 'target_first', label: 'Target First' },
+                { value: 'ohlc_path', label: 'OHLC Path' },
+              ]}
+              value={intrabarPolicy}
+              onChange={setIntrabarPolicy}
+            />
           </div>
         </Motion.div>
 
-        {/* Chart */}
-        <Motion.div variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
-          <div className="mb-4">
-            <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-1">Backtest Chart</p>
-            <h2 className="text-[20px] font-semibold tracking-tight">Trade entries and exits</h2>
+        <Motion.div variants={itemVariants}>
+          <div className="flex items-end justify-between mb-4">
+            <Label>Price · trades</Label>
+            <span className="text-[11px] font-mono text-[#525252]">{results?.trades?.length ?? 0} trades</span>
           </div>
-          <div ref={chartContainerRef} className="h-[420px] border border-[#1a1a1a] overflow-hidden" />
+          <div ref={chartContainerRef} className="h-[420px] w-full" />
         </Motion.div>
 
-        {/* Equity */}
-        <Motion.div variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
-          <div className="mb-4">
-            <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-1">Equity Curve</p>
-            <h2 className="text-[20px] font-semibold tracking-tight">Balance progression</h2>
-          </div>
-          <div ref={equityChartRef} className="h-[160px] border border-[#1a1a1a] overflow-hidden" />
+        <Motion.div variants={itemVariants}>
+          <Label className="block mb-4">Equity curve</Label>
+          <div ref={equityChartRef} className="h-[160px] w-full" />
         </Motion.div>
 
-        {/* Results */}
         {stats && (
-            <Motion.div variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
-              <div className="mb-6">
-                <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-1">Results</p>
-                <h2 className="text-[20px] font-semibold tracking-tight">Backtest Summary</h2>
-                <p className="text-[12px] text-[#737373] font-mono mt-2">CSV: {selectedDataset}</p>
-                <p className="text-[12px] text-[#737373] font-mono mt-1">Preset: {activePresetName}</p>
+            <Motion.div variants={itemVariants} className="space-y-12">
+              <div>
+                <Label>Result</Label>
+                <div className="flex items-baseline gap-6 mt-3 flex-wrap">
+                  <span className={`text-[48px] leading-none font-light tabular-nums ${totalPnl >= 0 ? 'text-[#FAFAFA]' : 'text-[#737373]'}`}>
+                    {totalPnl >= 0 ? '+' : ''}${formatMoney(totalPnl)}
+                  </span>
+                  <span className="text-[12px] font-mono text-[#737373]">
+                    {selectedDataset} · {activePresetName}
+                  </span>
+                </div>
               </div>
 
-              <div className="mb-6 border border-[#1a1a1a] bg-black/30 p-4">
-                <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-3">Last {RESULT_HISTORY_LIMIT} Runs</p>
+              <MetricFrieze metrics={[
+                { label: 'Win Rate', numeric: winRate, format: (v) => `${v.toFixed(1)}%` },
+                { label: 'Total Trades', numeric: totalTrades, format: (v) => Math.round(v).toString() },
+                { label: 'Winners', numeric: stats.winners, format: (v) => Math.round(v).toString() },
+                { label: 'Losers', numeric: stats.losers, format: (v) => Math.round(v).toString() },
+                { label: 'Avg Win', numeric: stats.avg_win, format: (v) => `$${formatMoney(v)}` },
+                { label: 'Avg Loss', numeric: Math.abs(stats.avg_loss || 0), format: (v) => `$${formatMoney(v)}` },
+                { label: 'Partial Rate', numeric: partialTpRate, format: (v) => `${v.toFixed(1)}%` },
+                { label: 'Partial P/L', numeric: partialTpRealized, format: (v) => `$${formatMoney(v)}` },
+              ]} />
+
+              <div>
+                <Label className="block mb-4">Last {RESULT_HISTORY_LIMIT} runs</Label>
                 {recentResults.length === 0 ? (
-                  <p className="text-[12px] text-[#737373] font-mono">No previous runs saved yet.</p>
+                  <p className="text-[12px] text-[#525252]">No previous runs saved yet.</p>
                 ) : (
-                  <div className="space-y-2">
+                  <div>
+                    <div className="grid grid-cols-[1.4fr_1.2fr_0.5fr_1fr_0.8fr_0.6fr_0.6fr_0.6fr] gap-4 py-2 border-b border-[#141414]">
+                      <span className="text-[10px] uppercase tracking-[0.18em] text-[#525252]">When</span>
+                      <span className="text-[10px] uppercase tracking-[0.18em] text-[#525252]">Dataset</span>
+                      <span className="text-[10px] uppercase tracking-[0.18em] text-[#525252]">TF</span>
+                      <span className="text-[10px] uppercase tracking-[0.18em] text-[#525252]">Preset</span>
+                      <span className="text-[10px] uppercase tracking-[0.18em] text-[#525252] text-right">P/L</span>
+                      <span className="text-[10px] uppercase tracking-[0.18em] text-[#525252] text-right">Win %</span>
+                      <span className="text-[10px] uppercase tracking-[0.18em] text-[#525252] text-right">Trades</span>
+                      <span />
+                    </div>
                     {recentResults.map((run) => (
-                      <div key={run.id} className="grid grid-cols-2 md:grid-cols-8 gap-2 text-[12px] font-mono border border-[#1a1a1a] bg-black/40 px-3 py-2 items-center">
-                        <span className="text-[#a3a3a3]">{new Date(run.runAt).toLocaleString()}</span>
-                        <span className="text-[#fafafa]">{run.dataset || 'Unknown CSV'}</span>
-                        <span className="text-[#a3a3a3]">{run.timeframe ?? '-'}m</span>
-                        <span className="text-[#a78bfa]">{run.presetName || DEFAULT_PRESET_NAME}</span>
-                        <span className={(run.totalPnl ?? 0) >= 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}>${formatMoney(Number(run.totalPnl ?? 0))}</span>
-                        <span className="text-[#60a5fa]">{Number(run.winRate ?? 0).toFixed(1)}%</span>
-                        <span className="text-[#fafafa]">{Number(run.totalTrades ?? 0)} trades</span>
+                      <div key={run.id} className="grid grid-cols-[1.4fr_1.2fr_0.5fr_1fr_0.8fr_0.6fr_0.6fr_0.6fr] gap-4 py-3 border-b border-[#141414] items-center">
+                        <span className="text-[12px] font-mono text-[#A3A3A3]">{new Date(run.runAt).toLocaleString()}</span>
+                        <span className="text-[12px] font-mono text-[#FAFAFA]">{run.dataset || '—'}</span>
+                        <span className="text-[12px] font-mono text-[#737373]">{run.timeframe ?? '—'}m</span>
+                        <span className="text-[12px] text-[#A3A3A3]">{run.presetName || DEFAULT_PRESET_NAME}</span>
+                        <span className={`text-[12px] font-mono tabular-nums text-right ${(run.totalPnl ?? 0) >= 0 ? 'text-[#FAFAFA]' : 'text-[#737373]'}`}>
+                          {(run.totalPnl ?? 0) >= 0 ? '+' : ''}${formatMoney(Number(run.totalPnl ?? 0))}
+                        </span>
+                        <span className="text-[12px] font-mono tabular-nums text-right text-[#A3A3A3]">{Number(run.winRate ?? 0).toFixed(1)}%</span>
+                        <span className="text-[12px] font-mono tabular-nums text-right text-[#A3A3A3]">{Number(run.totalTrades ?? 0)}</span>
                         <button
                           onClick={() => exportRunParameters(run)}
-                          className="px-2 py-1 text-[11px] border border-[#262626] text-[#d4d4d8] hover:text-[#fafafa] hover:border-[#404040] transition-colors"
+                          className="text-[10px] uppercase tracking-[0.18em] text-[#525252] hover:text-[#FAFAFA] text-right"
                         >
                           Export
                         </button>
@@ -830,23 +879,23 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
                 )}
               </div>
 
-              <div className="border-t border-[#1a1a1a] my-6" />
-              <div className="space-y-4 mb-6">
-                <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="mt-12 mb-10" />
+              <div>
+                <div className="flex items-end justify-between gap-4 mb-6">
                   <div>
-                    <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-1">Monte Carlo</p>
-                    <h3 className="text-[16px] font-semibold tracking-tight">Stress test the current trade set</h3>
+                    <Label>Monte Carlo</Label>
+                    <p className="text-[12px] text-[#737373] mt-2">Stress-test the current trade set</p>
                   </div>
-                  <button
-                      onClick={runMonteCarlo}
-                      disabled={mcLoading || !results?.trades?.length}
-                      className="px-4 py-2 text-[13px] font-semibold font-mono bg-[#6366f1] text-white hover:bg-[#4f46e5] transition-colors disabled:opacity-40"
+                  <Button
+                    variant="outline"
+                    onClick={runMonteCarlo}
+                    disabled={mcLoading || !results?.trades?.length}
                   >
-                    {mcLoading ? 'Running Monte Carlo...' : 'Run Monte Carlo'}
-                  </button>
+                    {mcLoading ? 'Running…' : 'Run Monte Carlo'}
+                  </Button>
                 </div>
 
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-4">
                   <NumberInput label="Runs" value={mcRuns} onChange={setMcRuns} min={1} step={1} />
                   <NumberInput label="PnL Var %" value={mcVariationPct} onChange={setMcVariationPct} min={0} step={1} />
                   <NumberInput label="Price Noise %" value={mcPriceNoisePct} onChange={setMcPriceNoisePct} min={0} step={1} />
@@ -855,98 +904,55 @@ export function BacktestingTab({ datasets = [], selectedDataset, onDatasetChange
                   <NumberInput label="Ruin DD %" value={mcRuinDrawdownPct} onChange={setMcRuinDrawdownPct} min={0} step={1} />
                 </div>
 
-                <label className="inline-flex items-center gap-2 text-[12px] font-mono text-[#a3a3a3]">
+                <label className="inline-flex items-center gap-3 text-[11px] uppercase tracking-[0.14em] text-[#737373] cursor-pointer">
                   <input
                       type="checkbox"
                       checked={mcShuffleTrades}
                       onChange={(e) => setMcShuffleTrades(e.target.checked)}
-                      className="h-4 w-4"
+                      className="h-3 w-3 accent-white"
                   />
                   Shuffle trade order each simulation run
                 </label>
 
                 {mcErrorMessage && (
-                    <div className="border border-[#7f1d1d] bg-[#1b0a0a] text-[#fca5a5] px-4 py-3 text-[12px] font-mono">
+                    <div className="mt-4 text-[12px] text-[#FAFAFA] border-l-2 border-[#525252] pl-4 py-2">
                       {mcErrorMessage}
                     </div>
                 )}
 
                 {mcResult && (
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                        <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Avg PnL</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.avg_pnl ?? 0).toFixed(2)}</p></div>
-                        <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Profitable %</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.profitable_run_pct ?? 0).toFixed(2)}%</p></div>
-                        <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Worst DD %</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.worst_max_drawdown_pct ?? 0).toFixed(2)}%</p></div>
-                        <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Avg WR</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.avg_win_rate ?? 0).toFixed(2)}%</p></div>
-                        <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Avg PF</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.avg_profit_factor ?? 0).toFixed(2)}</p></div>
-                        <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Ruin %</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.probability_of_ruin ?? 0).toFixed(2)}%</p></div>
-                      </div>
+                    <div className="mt-8 space-y-8">
+                      <MetricFrieze metrics={[
+                        { label: 'Avg PnL', numeric: mcResult.summary?.avg_pnl ?? 0, format: (v) => v.toFixed(2) },
+                        { label: 'Profitable %', numeric: mcResult.summary?.profitable_run_pct ?? 0, format: (v) => `${v.toFixed(1)}%` },
+                        { label: 'Worst DD %', numeric: mcResult.summary?.worst_max_drawdown_pct ?? 0, format: (v) => `${v.toFixed(1)}%` },
+                        { label: 'Avg WR', numeric: mcResult.summary?.avg_win_rate ?? 0, format: (v) => `${v.toFixed(1)}%` },
+                        { label: 'Avg PF', numeric: mcResult.summary?.avg_profit_factor ?? 0, format: (v) => v.toFixed(2) },
+                        { label: 'Ruin %', numeric: mcResult.summary?.probability_of_ruin ?? 0, format: (v) => `${v.toFixed(1)}%` },
+                      ]} />
 
-                      <div className="border border-[#1a1a1a] bg-black/40 overflow-auto">
-                        <div className="grid grid-cols-[60px_100px_120px_100px_100px_80px] gap-3 px-4 py-3 text-[10px] font-mono uppercase tracking-widest text-[#737373] border-b border-[#1a1a1a]">
-                          <span>Run</span>
-                          <span>Net PnL</span>
-                          <span>Max DD %</span>
-                          <span>Win Rate</span>
-                          <span>PF</span>
-                          <span>Ruin</span>
+                      <div>
+                        <div className="grid grid-cols-[60px_100px_120px_100px_100px_80px] gap-3 py-2 border-b border-[#141414]">
+                          <span className="text-[10px] uppercase tracking-[0.18em] text-[#525252]">Run</span>
+                          <span className="text-[10px] uppercase tracking-[0.18em] text-[#525252]">Net PnL</span>
+                          <span className="text-[10px] uppercase tracking-[0.18em] text-[#525252]">Max DD %</span>
+                          <span className="text-[10px] uppercase tracking-[0.18em] text-[#525252]">Win Rate</span>
+                          <span className="text-[10px] uppercase tracking-[0.18em] text-[#525252]">PF</span>
+                          <span className="text-[10px] uppercase tracking-[0.18em] text-[#525252]">Ruin</span>
                         </div>
                         {mcRunsData.map((run) => (
-                            <div key={run.run} className="grid grid-cols-[60px_100px_120px_100px_100px_80px] gap-3 px-4 py-2 text-[12px] font-mono border-b border-[#111111]">
-                              <span>{run.run}</span>
-                              <span className={run.net_pnl >= 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}>{Number(run.net_pnl).toFixed(2)}</span>
-                              <span>{Number(run.max_drawdown_pct).toFixed(2)}</span>
-                              <span>{Number(run.win_rate).toFixed(2)}%</span>
-                              <span>{Number(run.profit_factor).toFixed(2)}</span>
-                              <span className={run.ruin ? 'text-[#ef4444]' : 'text-[#737373]'}>{run.ruin ? 'Yes' : 'No'}</span>
+                            <div key={run.run} className="grid grid-cols-[60px_100px_120px_100px_100px_80px] gap-3 py-2 text-[12px] font-mono border-b border-[#141414] tabular-nums">
+                              <span className="text-[#A3A3A3]">{run.run}</span>
+                              <span className={run.net_pnl >= 0 ? 'text-[#FAFAFA]' : 'text-[#737373]'}>{Number(run.net_pnl).toFixed(2)}</span>
+                              <span className="text-[#A3A3A3]">{Number(run.max_drawdown_pct).toFixed(2)}</span>
+                              <span className="text-[#A3A3A3]">{Number(run.win_rate).toFixed(2)}%</span>
+                              <span className="text-[#A3A3A3]">{Number(run.profit_factor).toFixed(2)}</span>
+                              <span className={run.ruin ? 'text-[#FAFAFA]' : 'text-[#525252]'}>{run.ruin ? 'Yes' : 'No'}</span>
                             </div>
                         ))}
                       </div>
                     </div>
                 )}
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-10 gap-4">
-                <div className="p-4 border border-[#1a1a1a] bg-black/40">
-                  <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-2">Net P/L</p>
-                  <p className={`text-[24px] font-semibold ${totalPnl >= 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}`}>${formatMoney(totalPnl)}</p>
-                </div>
-                <div className="p-4 border border-[#1a1a1a] bg-black/40">
-                  <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-2">Win Rate</p>
-                  <p className={`text-[24px] font-semibold ${winRate > 50 ? 'text-[#10b981]' : 'text-[#ef4444]'}`}>{winRate.toFixed(1)}%</p>
-                </div>
-                <div className="p-4 border border-[#1a1a1a] bg-black/40">
-                  <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-2">Total Trades</p>
-                  <p className="text-[24px] font-semibold text-[#fafafa]">{totalTrades}</p>
-                </div>
-                <div className="p-4 border border-[#1a1a1a] bg-black/40">
-                  <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-2">Winners</p>
-                  <p className="text-[24px] font-semibold text-[#10b981]">{stats.winners}</p>
-                </div>
-                <div className="p-4 border border-[#1a1a1a] bg-black/40">
-                  <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-2">Losers</p>
-                  <p className="text-[24px] font-semibold text-[#ef4444]">{stats.losers}</p>
-                </div>
-                <div className="p-4 border border-[#1a1a1a] bg-black/40">
-                  <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-2">Avg Win</p>
-                  <p className="text-[24px] font-semibold text-[#10b981]">${formatMoney(stats.avg_win)}</p>
-                </div>
-                <div className="p-4 border border-[#1a1a1a] bg-black/40">
-                  <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-2">Avg Loss</p>
-                  <p className="text-[24px] font-semibold text-[#ef4444]">${formatMoney(Math.abs(stats.avg_loss))}</p>
-                </div>
-                <div className="p-4 border border-[#1a1a1a] bg-black/40">
-                  <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-2">Partials</p>
-                  <p className="text-[24px] font-semibold text-[#fafafa]">{partialTpTrades}</p>
-                </div>
-                <div className="p-4 border border-[#1a1a1a] bg-black/40">
-                  <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-2">Partial Rate</p>
-                  <p className="text-[24px] font-semibold text-[#60a5fa]">{partialTpRate.toFixed(1)}%</p>
-                </div>
-                <div className="p-4 border border-[#1a1a1a] bg-black/40">
-                  <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-2">Partial P/L</p>
-                  <p className={`text-[24px] font-semibold ${partialTpRealized >= 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}`}>${formatMoney(partialTpRealized)}</p>
-                </div>
               </div>
             </Motion.div>
         )}

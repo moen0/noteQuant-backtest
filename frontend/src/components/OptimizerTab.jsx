@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from 'recharts';
 import { NumberInput } from './NumberInput';
-
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
+import { API_BASE_URL } from '../constants';
 const TIMEFRAMES = [1, 3, 5, 15, 30, 60];
 const OBJECTIVES = [
   { key: 'net_pnl', label: 'Net PnL' },
@@ -555,17 +554,17 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
 
   return (
       <div className="space-y-6">
-        <section className="border border-[#262626] bg-[#0a0a0a] p-6">
+        <section className="pt-8 border-t border-[#141414]">
           <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
             <div>
               <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest mb-1">Optimizer</p>
-              <h2 className="text-[20px] font-semibold tracking-tight">Parameter sweep simulations</h2>
+              <h2 className="text-[20px] font-light tracking-[-0.02em]">Parameter sweep simulations</h2>
             </div>
             <div className="flex items-center gap-3">
               {loading && (
                   <button
                       onClick={abortOptimization}
-                      className="px-4 py-2 text-[13px] font-semibold font-mono border border-[#ef4444] text-[#ef4444] hover:bg-[#ef4444] hover:text-black transition-colors"
+                      className="px-4 py-2 text-[13px] font-semibold font-mono border border-[#404040] text-[#737373] hover:text-[#FAFAFA] transition-colors"
                   >
                     Abort
                   </button>
@@ -579,14 +578,14 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
               <button
                   onClick={runMonteCarlo}
                   disabled={loading || mcLoading || !best}
-                  className="px-5 py-2 text-[13px] font-semibold font-mono bg-[#6366f1] text-white hover:bg-[#4f46e5] transition-colors disabled:opacity-40"
+                  className="px-5 py-2 text-[13px] font-semibold font-mono border border-[#262626] text-[#FAFAFA] hover:border-[#404040] transition-colors disabled:opacity-40"
               >
                 {mcLoading ? 'Running Monte Carlo...' : 'Monte Carlo (Selected)'}
               </button>
               <button
                   onClick={() => activateTopResult(selectedTopResult)}
                   disabled={loading || !selectedTopResult}
-                  className="px-5 py-2 text-[13px] font-semibold font-mono border border-[#10b981] text-[#10b981] hover:bg-[#10b981] hover:text-black transition-colors disabled:opacity-40"
+                  className="px-5 py-2 text-[13px] font-semibold font-mono border border-[#404040] text-[#FAFAFA] hover:text-[#FAFAFA] transition-colors disabled:opacity-40"
               >
                 Activate Selected
               </button>
@@ -603,7 +602,7 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
           {showPresets && (
               <div className="mb-6 p-5 border border-[#262626] bg-black">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-[14px] font-semibold tracking-tight">Saved Presets</h3>
+                  <h3 className="text-[14px] font-light tracking-[-0.02em]">Saved Presets</h3>
                   <button onClick={() => setShowPresets(false)} className="text-[#525252] hover:text-[#fafafa] text-[18px] leading-none transition-colors">x</button>
                 </div>
                 {Object.keys(presets).length === 0 ? (
@@ -649,7 +648,7 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
                               </button>
                               <button
                                   onClick={() => deletePreset(name)}
-                                  className="px-3 py-1 text-[12px] font-mono border border-[#262626] text-[#ef4444] hover:border-[#ef4444] transition-colors"
+                                  className="px-3 py-1 text-[12px] font-mono border border-[#262626] text-[#737373] hover:border-[#404040] transition-colors"
                               >
                                 Delete
                               </button>
@@ -675,7 +674,7 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
           </div>
 
               {errorMessage && (
-                  <div className="mb-6 border border-[#7f1d1d] bg-[#1b0a0a] text-[#fca5a5] px-4 py-3 text-[12px] font-mono">
+                  <div className="mb-6 border-l-2 border-[#525252] text-[#FAFAFA] px-4 py-3 text-[12px] font-mono">
                     {errorMessage}
                   </div>
               )}
@@ -761,7 +760,7 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
                 <TextListInput label="BE Trigger RR" value={beTriggerRrValues} onChange={setBeTriggerRrValues} placeholder="1.0,1.5,2.0" />
               </div>
 
-              <div className="mt-6 border border-[#1a1a1a] bg-black/40 p-4">
+              <div className="mt-6 border-b border-[#141414] p-4">
                 <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest mb-4">Monte Carlo Settings</p>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                   <NumberInput label="Runs" value={mcRuns} onChange={setMcRuns} min={1} step={1} />
@@ -789,23 +788,23 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
               </div>
 
               {mcErrorMessage && (
-                  <div className="mt-4 border border-[#7f1d1d] bg-[#1b0a0a] text-[#fca5a5] px-4 py-3 text-[12px] font-mono">
+                  <div className="mt-4 border-l-2 border-[#525252] text-[#FAFAFA] px-4 py-3 text-[12px] font-mono">
                     {mcErrorMessage}
                   </div>
               )}
         </section>
 
         {result && (
-            <section className="border border-[#262626] bg-[#0a0a0a] p-6 space-y-6">
+            <section className="pt-8 border-t border-[#141414] space-y-6">
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="p-4 border border-[#1a1a1a] bg-black/40">
+                <div className="p-4 border-b border-[#141414]">
                   <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-2">Combos</p>
                   <p className="text-[22px] font-semibold">{result.executed_combinations ?? result.total_combinations}</p>
                   <p className="text-[11px] text-[#737373] font-mono mt-1">
                     generated: {result.generated_combinations ?? result.total_combinations}
                   </p>
                   {(result.capped_by_max_combinations || false) && (
-                      <p className="text-[11px] text-[#f59e0b] font-mono mt-1">
+                      <p className="text-[11px] text-[#A3A3A3] font-mono mt-1">
                         capped at {result.max_combinations}
                       </p>
                   )}
@@ -814,24 +813,24 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
                     {result.combo_sampling_seed !== null && result.combo_sampling_seed !== undefined ? ` (seed ${result.combo_sampling_seed})` : ''}
                   </p>
                 </div>
-                <div className="p-4 border border-[#1a1a1a] bg-black/40">
+                <div className="p-4 border-b border-[#141414]">
                   <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-2">Valid</p>
                   <p className="text-[22px] font-semibold">{result.valid_results}</p>
                 </div>
-                <div className="p-4 border border-[#1a1a1a] bg-black/40">
+                <div className="p-4 border-b border-[#141414]">
                   <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-2">Elapsed</p>
                   <p className="text-[22px] font-semibold">{result.elapsed_seconds}s</p>
                 </div>
-                <div className="p-4 border border-[#1a1a1a] bg-black/40">
+                <div className="p-4 border-b border-[#141414]">
                   <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-2">Speed</p>
                   <p className="text-[22px] font-semibold">{result.combos_per_second}/s</p>
                 </div>
               </div>
 
               {best && (
-                  <div className="p-4 border border-[#1a1a1a] bg-black/40">
+                  <div className="p-4 border-b border-[#141414]">
                     <p className="text-[11px] text-[#525252] font-mono uppercase tracking-widest mb-2">Best Result</p>
-                    <p className="text-[20px] font-semibold text-[#10b981]">
+                    <p className="text-[20px] font-semibold text-[#FAFAFA]">
                       {(OBJECTIVES.find((o) => o.key === (result?.rank_objective ?? rankObjective))?.label ?? 'Fitness')}
                       {' '}
                       {Number(best[result?.rank_objective ?? rankObjective] ?? best.custom_fitness ?? 0).toFixed(3)}
@@ -843,17 +842,17 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
 
               {best && (
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-                    <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">PnL</p><p className="text-[16px] font-semibold">{best.net_pnl?.toFixed(2)}</p></div>
-                    <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Sharpe</p><p className="text-[16px] font-semibold">{best.sharpe_ratio?.toFixed(2)}</p></div>
-                    <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Sortino</p><p className="text-[16px] font-semibold">{best.sortino_ratio?.toFixed(2)}</p></div>
-                    <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Profit Factor</p><p className="text-[16px] font-semibold">{best.profit_factor?.toFixed(2)}</p></div>
-                    <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Calmar</p><p className="text-[16px] font-semibold">{best.calmar_ratio?.toFixed(2)}</p></div>
-                    <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Max DD %</p><p className="text-[16px] font-semibold">{best.max_drawdown_pct?.toFixed(2)}</p></div>
+                    <div className="p-3 border-b border-[#141414]"><p className="text-[10px] text-[#737373] font-mono uppercase">PnL</p><p className="text-[16px] font-semibold">{best.net_pnl?.toFixed(2)}</p></div>
+                    <div className="p-3 border-b border-[#141414]"><p className="text-[10px] text-[#737373] font-mono uppercase">Sharpe</p><p className="text-[16px] font-semibold">{best.sharpe_ratio?.toFixed(2)}</p></div>
+                    <div className="p-3 border-b border-[#141414]"><p className="text-[10px] text-[#737373] font-mono uppercase">Sortino</p><p className="text-[16px] font-semibold">{best.sortino_ratio?.toFixed(2)}</p></div>
+                    <div className="p-3 border-b border-[#141414]"><p className="text-[10px] text-[#737373] font-mono uppercase">Profit Factor</p><p className="text-[16px] font-semibold">{best.profit_factor?.toFixed(2)}</p></div>
+                    <div className="p-3 border-b border-[#141414]"><p className="text-[10px] text-[#737373] font-mono uppercase">Calmar</p><p className="text-[16px] font-semibold">{best.calmar_ratio?.toFixed(2)}</p></div>
+                    <div className="p-3 border-b border-[#141414]"><p className="text-[10px] text-[#737373] font-mono uppercase">Max DD %</p><p className="text-[16px] font-semibold">{best.max_drawdown_pct?.toFixed(2)}</p></div>
                   </div>
               )}
 
               {result?.overfitting && (
-                  <div className="p-4 border border-[#1a1a1a] bg-black/40">
+                  <div className="p-4 border-b border-[#141414]">
                     <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest mb-3">Overfitting Analysis</p>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div>
@@ -862,13 +861,13 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
                       </div>
                       <div>
                         <p className="text-[10px] text-[#737373] font-mono uppercase">Deflated Sharpe</p>
-                        <p className={`text-[16px] font-semibold ${(result.overfitting.deflated_sharpe ?? 0) > 0.5 ? 'text-[#10b981]' : (result.overfitting.deflated_sharpe ?? 0) > 0 ? 'text-[#eab308]' : 'text-[#ef4444]'}`}>
+                        <p className={`text-[16px] font-semibold ${(result.overfitting.deflated_sharpe ?? 0) > 0.5 ? 'text-[#FAFAFA]' : (result.overfitting.deflated_sharpe ?? 0) > 0 ? 'text-[#eab308]' : 'text-[#737373]'}`}>
                           {Number(result.overfitting.deflated_sharpe ?? 0).toFixed(3)}
                         </p>
                       </div>
                       <div>
                         <p className="text-[10px] text-[#737373] font-mono uppercase">P-Value</p>
-                        <p className={`text-[16px] font-semibold ${(result.overfitting.dsr_p_value ?? 1) < 0.05 ? 'text-[#10b981]' : (result.overfitting.dsr_p_value ?? 1) < 0.25 ? 'text-[#eab308]' : 'text-[#ef4444]'}`}>
+                        <p className={`text-[16px] font-semibold ${(result.overfitting.dsr_p_value ?? 1) < 0.05 ? 'text-[#FAFAFA]' : (result.overfitting.dsr_p_value ?? 1) < 0.25 ? 'text-[#eab308]' : 'text-[#737373]'}`}>
                           {Number(result.overfitting.dsr_p_value ?? 1).toFixed(4)}
                         </p>
                       </div>
@@ -888,7 +887,7 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
               )}
 
               {result?.parameter_sensitivity && Object.keys(result.parameter_sensitivity).length > 0 && (
-                  <div className="p-4 border border-[#1a1a1a] bg-black/40">
+                  <div className="p-4 border-b border-[#141414]">
                     <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest mb-3">Parameter Sensitivity</p>
                     <p className="text-[11px] text-[#525252] font-mono mb-3">How the rank objective changes across parameter values. High range = high sensitivity = fragile.</p>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -896,7 +895,7 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
                         <div key={paramName} className="p-3 border border-[#1a1a1a]">
                           <div className="flex items-center justify-between mb-2">
                             <span className="text-[12px] font-mono font-semibold">{paramName}</span>
-                            <span className={`text-[10px] font-mono px-2 py-0.5 ${data.sensitive ? 'bg-[#ef4444]/20 text-[#ef4444]' : 'bg-[#10b981]/20 text-[#10b981]'}`}>
+                            <span className={`text-[10px] font-mono px-2 py-0.5 ${data.sensitive ? 'bg-[#ef4444]/20 text-[#737373]' : 'bg-[#10b981]/20 text-[#FAFAFA]'}`}>
                               {data.sensitive ? 'FRAGILE' : 'STABLE'}
                             </span>
                           </div>
@@ -904,7 +903,7 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
                             {Object.entries(data.values || {}).map(([val, stats]) => (
                               <div key={val} className="flex justify-between text-[11px] font-mono">
                                 <span className="text-[#737373]">{val}</span>
-                                <span className={stats.median > 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}>
+                                <span className={stats.median > 0 ? 'text-[#FAFAFA]' : 'text-[#737373]'}>
                                   {stats.median?.toFixed(3)} ({stats.count})
                                 </span>
                               </div>
@@ -920,7 +919,7 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
               )}
 
               {result?.validation_results && result.validation_results.length > 0 && (
-                  <div className="p-4 border border-[#1a1a1a] bg-black/40">
+                  <div className="p-4 border-b border-[#141414]">
                     <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest mb-3">Walk-Forward: Validation Results</p>
                     <div className="overflow-auto">
                       <div className="grid grid-cols-[60px_90px_100px_100px_100px] gap-3 px-4 py-2 text-[10px] font-mono uppercase tracking-widest text-[#737373] border-b border-[#1a1a1a]">
@@ -933,9 +932,9 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
                       {result.validation_results.map((entry, idx) => (
                         <div key={idx} className="grid grid-cols-[60px_90px_100px_100px_100px] gap-3 px-4 py-2 text-[12px] font-mono border-b border-[#111111]">
                           <span>{idx + 1}</span>
-                          <span className={(entry.train?.net_pnl ?? 0) >= 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}>{(entry.train?.net_pnl ?? 0).toFixed(2)}</span>
+                          <span className={(entry.train?.net_pnl ?? 0) >= 0 ? 'text-[#FAFAFA]' : 'text-[#737373]'}>{(entry.train?.net_pnl ?? 0).toFixed(2)}</span>
                           <span>{(entry.train?.win_rate ?? 0).toFixed(1)}%</span>
-                          <span className={(entry.validation?.net_pnl ?? 0) >= 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}>{(entry.validation?.net_pnl ?? 0).toFixed(2)}</span>
+                          <span className={(entry.validation?.net_pnl ?? 0) >= 0 ? 'text-[#FAFAFA]' : 'text-[#737373]'}>{(entry.validation?.net_pnl ?? 0).toFixed(2)}</span>
                           <span>{(entry.validation?.win_rate ?? 0).toFixed(1)}%</span>
                         </div>
                       ))}
@@ -944,12 +943,12 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
               )}
 
               {result?.test_result && (
-                  <div className="p-4 border border-[#1a1a1a] bg-black/40">
+                  <div className="p-4 border-b border-[#141414]">
                     <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest mb-3">Walk-Forward: Test Result (Out-of-Sample)</p>
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div>
                         <p className="text-[10px] text-[#737373] font-mono uppercase">Net PnL</p>
-                        <p className={`text-[16px] font-semibold ${(result.test_result.test?.net_pnl ?? 0) >= 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}`}>
+                        <p className={`text-[16px] font-semibold ${(result.test_result.test?.net_pnl ?? 0) >= 0 ? 'text-[#FAFAFA]' : 'text-[#737373]'}`}>
                           {Number(result.test_result.test?.net_pnl ?? 0).toFixed(2)}
                         </p>
                       </div>
@@ -969,7 +968,7 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
                   </div>
               )}
 
-              <div className="border border-[#1a1a1a] bg-black/40 p-4">
+              <div className="border-b border-[#141414] p-4">
                 <div className="flex flex-wrap gap-4 items-center mb-4">
                   <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest">Pareto Front</p>
                   <div className="flex items-center gap-2">
@@ -1017,7 +1016,7 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
                 </div>
               </div>
 
-              <div className="border border-[#1a1a1a] bg-black/40 overflow-auto">
+              <div className="border-b border-[#141414] overflow-auto">
                 <div className="flex items-center justify-between px-4 py-3 border-b border-[#1a1a1a]">
                   <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest">Top Results</p>
                   <div className="flex items-center gap-2">
@@ -1061,7 +1060,7 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
                             className={`w-full text-left grid grid-cols-[60px_90px_100px_80px_1fr] gap-3 px-4 py-2 text-[12px] font-mono border-b border-[#111111] ${isSelected ? 'bg-[#0f172a]' : 'hover:bg-[#101010]'}`}
                         >
                           <span>{idx + 1}</span>
-                          <span className={row.net_pnl >= 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}>{(row.net_pnl ?? row.pnl ?? 0).toFixed(2)}</span>
+                          <span className={row.net_pnl >= 0 ? 'text-[#FAFAFA]' : 'text-[#737373]'}>{(row.net_pnl ?? row.pnl ?? 0).toFixed(2)}</span>
                           <span>{row.win_rate}%</span>
                           <span>{row.trade_count ?? row.trades}</span>
                           <span className="flex items-center justify-between gap-2">
@@ -1072,7 +1071,7 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
                           setPresetSaveRow(isSaving ? null : row);
                           setPresetSaveName('');
                         }}
-                        className="shrink-0 px-2 py-0.5 text-[10px] font-mono border border-[#262626] text-[#737373] hover:text-[#10b981] hover:border-[#10b981] transition-colors"
+                        className="shrink-0 px-2 py-0.5 text-[10px] font-mono border border-[#262626] text-[#737373] hover:text-[#FAFAFA] hover:border-[#404040] transition-colors"
                     >
                       Save
                     </button>
@@ -1103,23 +1102,23 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
               </div>
 
               {mcResult && (
-                  <div className="border border-[#1a1a1a] bg-black/40 p-4 space-y-4">
+                  <div className="border-b border-[#141414] p-4 space-y-4">
                     <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest">Monte Carlo Output</p>
                     <p className="text-[12px] font-mono text-[#a3a3a3]">
                       Base trades: {mcResult.base?.trade_count} | Base PnL: {Number(mcResult.base?.net_pnl ?? 0).toFixed(2)} | Base WR: {Number(mcResult.base?.win_rate ?? 0).toFixed(2)}%
                     </p>
 
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                      <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Avg PnL</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.avg_pnl ?? 0).toFixed(2)}</p></div>
-                      <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Profitable %</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.profitable_run_pct ?? 0).toFixed(2)}%</p></div>
-                      <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Worst Max DD %</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.worst_max_drawdown_pct ?? 0).toFixed(2)}</p></div>
-                      <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Avg WR</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.avg_win_rate ?? 0).toFixed(2)}%</p></div>
-                      <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Avg PF</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.avg_profit_factor ?? 0).toFixed(2)}</p></div>
-                      <div className="p-3 border border-[#1a1a1a] bg-black/40"><p className="text-[10px] text-[#737373] font-mono uppercase">Prob. of Ruin</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.probability_of_ruin ?? 0).toFixed(2)}%</p></div>
+                      <div className="p-3 border-b border-[#141414]"><p className="text-[10px] text-[#737373] font-mono uppercase">Avg PnL</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.avg_pnl ?? 0).toFixed(2)}</p></div>
+                      <div className="p-3 border-b border-[#141414]"><p className="text-[10px] text-[#737373] font-mono uppercase">Profitable %</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.profitable_run_pct ?? 0).toFixed(2)}%</p></div>
+                      <div className="p-3 border-b border-[#141414]"><p className="text-[10px] text-[#737373] font-mono uppercase">Worst Max DD %</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.worst_max_drawdown_pct ?? 0).toFixed(2)}</p></div>
+                      <div className="p-3 border-b border-[#141414]"><p className="text-[10px] text-[#737373] font-mono uppercase">Avg WR</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.avg_win_rate ?? 0).toFixed(2)}%</p></div>
+                      <div className="p-3 border-b border-[#141414]"><p className="text-[10px] text-[#737373] font-mono uppercase">Avg PF</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.avg_profit_factor ?? 0).toFixed(2)}</p></div>
+                      <div className="p-3 border-b border-[#141414]"><p className="text-[10px] text-[#737373] font-mono uppercase">Prob. of Ruin</p><p className="text-[16px] font-semibold">{Number(mcResult.summary?.probability_of_ruin ?? 0).toFixed(2)}%</p></div>
                     </div>
 
                     {mcPnlHistogram.length > 0 && (
-                        <div className="border border-[#1a1a1a] bg-black/40 p-3">
+                        <div className="border-b border-[#141414] p-3">
                           <div className="flex items-center justify-between mb-3">
                             <p className="text-[10px] text-[#737373] font-mono uppercase tracking-widest">PnL Distribution (Monte Carlo)</p>
                             <p className="text-[11px] text-[#a3a3a3] font-mono">
@@ -1156,11 +1155,11 @@ export function OptimizerTab({ datasets = [], selectedDataset, onDatasetChange, 
                       {(mcResult.sample_runs || []).map((run) => (
                           <div key={run.run} className="grid grid-cols-[60px_100px_120px_100px_100px_80px] gap-3 px-4 py-2 text-[12px] font-mono border-b border-[#111111]">
                             <span>{run.run}</span>
-                            <span className={run.net_pnl >= 0 ? 'text-[#10b981]' : 'text-[#ef4444]'}>{Number(run.net_pnl).toFixed(2)}</span>
+                            <span className={run.net_pnl >= 0 ? 'text-[#FAFAFA]' : 'text-[#737373]'}>{Number(run.net_pnl).toFixed(2)}</span>
                             <span>{Number(run.max_drawdown_pct).toFixed(2)}</span>
                             <span>{Number(run.win_rate).toFixed(2)}%</span>
                             <span>{Number(run.profit_factor).toFixed(2)}</span>
-                            <span className={run.ruin ? 'text-[#ef4444]' : 'text-[#737373]'}>{run.ruin ? 'Yes' : 'No'}</span>
+                            <span className={run.ruin ? 'text-[#737373]' : 'text-[#737373]'}>{run.ruin ? 'Yes' : 'No'}</span>
                           </div>
                       ))}
                     </div>

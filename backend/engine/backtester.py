@@ -15,16 +15,35 @@ def _normalize_policy(policy):
 
 def _open_position(signal, candle, equity, risk_reward, risk_pct,
                    slippage=0.0, spread=0.0):
-    """Create a position from a signal at the next candle's open.
+    """Create a position from a signal, respecting limit-order semantics.
 
-    Signals are generated after a candle closes.  Filling on the next open
-    avoids granting the strategy an impossible fill inside the signal candle.
+    If signal.entry_price is set we treat it as a limit order:
+    - BUY  limit: fills only if candle.low  <= entry_price (price dips to the level)
+    - SELL limit: fills only if candle.high >= entry_price (price rises to the level)
+    A gap through the limit fills at the candle open (better for the trader).
+    If the candle never reaches the limit this returns None so the caller can
+    keep the signal pending for the next candle.
+
+    Without entry_price (market order) the fill is candle.open as before.
 
     slippage and spread are applied against the trader (worse fill).
     """
     is_long = signal.direction == "BUY"
-    raw_entry = candle.open
     penalty = max(float(slippage or 0.0), 0.0) + max(float(spread or 0.0), 0.0)
+    limit = getattr(signal, "entry_price", None)
+
+    if limit is not None and math.isfinite(limit):
+        if is_long:
+            if candle.low > limit:
+                return None  # price never dipped to our buy limit
+            raw_entry = min(candle.open, limit)  # gap-down fills at open
+        else:
+            if candle.high < limit:
+                return None  # price never rose to our sell limit
+            raw_entry = max(candle.open, limit)  # gap-up fills at open
+    else:
+        raw_entry = candle.open
+
     entry = raw_entry + penalty if is_long else raw_entry - penalty
     sl = signal.stop_loss
     sl_distance = abs(entry - sl)
@@ -236,6 +255,10 @@ def run_backtest_stream(candles, strategy, starting_balance, risk_reward=1.0,
                         slippage=0.0, spread=0.0):
     position = None
     pending_signal = None
+    pending_since = 0          # candle index when signal was queued
+    # Cancel unfilled limit after this many candles. Pulled from strategy if available,
+    # so that strategy.max_retest_candles and backtester expiry stay in sync.
+    LIMIT_ORDER_EXPIRY = int(getattr(strategy, "max_retest_candles", 8))
     consecutive_losses = 0
     daily_pnl = defaultdict(float)
     total = len(candles)
@@ -247,7 +270,7 @@ def run_backtest_stream(candles, strategy, starting_balance, risk_reward=1.0,
 
     yield {"type": "start", "total_candles": total}
 
-    progress_interval = max(1, total // 50)
+    progress_interval = max(1, total // 200)
 
     for i, candle in enumerate(candles):
         if i % progress_interval == 0:
@@ -256,7 +279,10 @@ def run_backtest_stream(candles, strategy, starting_balance, risk_reward=1.0,
         if position is None and pending_signal is not None:
             position = _open_position(pending_signal, candle, equity, risk_reward, risk_pct,
                                       slippage=slippage, spread=spread)
-            pending_signal = None
+            if position is not None:
+                pending_signal = None  # filled
+            elif (i - pending_since) >= LIMIT_ORDER_EXPIRY:
+                pending_signal = None  # expired unfilled
 
         if position:
             _apply_break_even_if_triggered(position, candle, strategy)
@@ -293,6 +319,7 @@ def run_backtest_stream(candles, strategy, starting_balance, risk_reward=1.0,
 
             if signal is not None:
                 pending_signal = signal
+                pending_since = i
 
     if position and candles:
         last_candle = candles[-1]

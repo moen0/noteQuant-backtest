@@ -8,45 +8,28 @@ import {
 import { BacktestingTab } from './components/BacktestingTab';
 import { OptimizerTab } from './components/OptimizerTab';
 import { WalkForwardTab } from './components/WalkForwardTab';
-import { TradeHistory } from './components/TradeHistory';
 import { motion as Motion } from 'motion/react';
 
-import { EquityCurve } from './components/EquityCurve';
-import { MetricCard } from './components/MetricCard';
-import { PerformanceBreakdown } from './components/PerformanceBreakdown';
-import { TradeDistribution } from './components/TradeDistribution';
+import { Runs } from './pages/Runs';
+import { RunDetail } from './pages/RunDetail';
+import { Strategies } from './pages/Strategies';
+import { Data } from './pages/Data';
 import appLogo from './assets/favicon.png';
-import { TIMEFRAMES, RR_OPTIONS, STARTING_BALANCE, CHART_THEME } from './constants';
+import { API_BASE_URL, TIMEFRAMES, RR_OPTIONS, STARTING_BALANCE } from './constants';
 import { formatMoney, buildEquityCurve, buildTradeMarkers, calculateMaxDrawdown, calculateSharpeRatio } from './utils';
+import { SideRail } from './design/SideRail';
+import { ContextPanel } from './design/ContextPanel';
+import { HeroMetric, MetricFrieze, TabPills, Button, Label, Sweep, ChartReadout } from './design/Primitives';
+import { chartTheme, variants as motionVariants } from './design/tokens';
+import { generateStrategyName } from './design/strategyName';
+import { CommandPalette, useCommandPalette } from './design/CommandPalette';
+import { useHashRoute } from './design/useHashRoute';
 
 const DATASET_FALLBACKS = [
-  { id: '2023gj.csv', label: '2023 GJ', default: true },
-  { id: 'data1.csv', label: 'Data 1', default: false },
-  { id: 'gbpjpy_mars.csv', label: 'Data 3', default: false },
+  { id: '2024.csv', label: '2024', default: true },
+  { id: '2023gj.csv', label: '2023 GJ', default: false },
+  { id: 'GBPJPY5.csv', label: 'GBPJPY 5M', default: false },
 ];
-
-function buildMonthlyReturns(trades) {
-  const buckets = new Map();
-  let runningBalance = STARTING_BALANCE;
-  const sorted = trades
-    .slice()
-    .sort((a, b) => new Date(a.exit_time) - new Date(b.exit_time));
-
-  sorted.forEach((trade) => {
-    const date = new Date(trade.exit_time);
-    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-    if (!buckets.has(key)) {
-      buckets.set(key, { month: date.toLocaleDateString('en-US', { month: 'short' }), pnl: 0, balanceAtStart: runningBalance });
-    }
-    buckets.get(key).pnl += trade.pnl;
-    runningBalance += trade.pnl;
-  });
-
-  return Array.from(buckets.values()).map((entry) => ({
-    month: entry.month,
-    returnPct: Number(((entry.pnl / entry.balanceAtStart) * 100).toFixed(1)),
-  }));
-}
 
 function resolveDatasetLabel(datasets, selectedDataset) {
   return datasets.find((item) => item.id === selectedDataset)?.label ?? selectedDataset;
@@ -62,13 +45,23 @@ export default function App() {
   const markersRef = useRef(null);
   const abortControllerRef = useRef(null);
 
+  const { path: activeTab, query: routeQuery, setPath: setRoutePath, setQuery: setRouteQuery } = useHashRoute();
+
+  const setActiveTab = useCallback(
+    (tab) => setRoutePath(tab, routeQuery),
+    [routeQuery, setRoutePath]
+  );
+
   const [mounted, setMounted] = useState(false);
-  const [activeTab, setActiveTab] = useState('dashboard');
-  const [timeframe, setTimeframe] = useState(5);
-  const [riskReward, setRiskReward] = useState(2.5);
+  const [timeframe, setTimeframe] = useState(() => Number(routeQuery.tf) || 5);
+  const [riskReward, setRiskReward] = useState(() => Number(routeQuery.rr) || 2.5);
   const [showBacktest, setShowBacktest] = useState(true);
   const [datasets, setDatasets] = useState([]);
-  const [selectedDataset, setSelectedDataset] = useState('data.csv');
+  const [selectedDataset, setSelectedDataset] = useState(routeQuery.dataset || '');
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareDataset, setCompareDataset] = useState('');
+  const [chartReadout, setChartReadout] = useState(null);
+  const { open: paletteOpen, setOpen: setPaletteOpen } = useCommandPalette();
   const [chartsReady, setChartsReady] = useState(false);
   const [indicators, setIndicators] = useState({
     structure: true,
@@ -91,6 +84,15 @@ export default function App() {
   useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
+    setRouteQuery({
+      tf: String(timeframe),
+      rr: String(riskReward),
+      dataset: selectedDataset || undefined,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeframe, riskReward, selectedDataset]);
+
+  useEffect(() => {
     let link = document.querySelector("link[rel='icon']");
     if (!link) {
       link = document.createElement('link');
@@ -105,7 +107,7 @@ export default function App() {
     let isMounted = true;
     const loadDatasets = async () => {
       try {
-        const response = await fetch('http://localhost:8000/api/datasets');
+        const response = await fetch(`${API_BASE_URL}/api/datasets`);
         const data = await response.json();
         if (!isMounted) return;
         const apiDatasets = Array.isArray(data.datasets) ? data.datasets : [];
@@ -159,11 +161,11 @@ export default function App() {
       const shouldFetchBacktest = shouldLoadBacktest && !hasSharedBacktest;
       const datasetQuery = `dataset=${encodeURIComponent(selectedDataset)}`;
       const fetches = [
-        fetch(`http://localhost:8000/api/candles?timeframe=${timeframe}&${datasetQuery}`, { signal: controller.signal }),
-        fetch(`http://localhost:8000/api/indicators?timeframe=${timeframe}&${datasetQuery}`, { signal: controller.signal }),
+        fetch(`${API_BASE_URL}/api/candles?timeframe=${timeframe}&${datasetQuery}`, { signal: controller.signal }),
+        fetch(`${API_BASE_URL}/api/indicators?timeframe=${timeframe}&${datasetQuery}`, { signal: controller.signal }),
       ];
       if (shouldFetchBacktest) {
-        fetches.push(fetch(`http://localhost:8000/api/backtest?timeframe=${timeframe}&rr=${riskReward}&lookback=${stratParams.lookback}&ob_age=${stratParams.obAge}&atr_mult=${stratParams.atrMult}&sweep=${stratParams.sweep}&sweep_lookback=${stratParams.sweepLookback}&session=${stratParams.session}&${datasetQuery}`, { signal: controller.signal }));
+        fetches.push(fetch(`${API_BASE_URL}/api/backtest?timeframe=${timeframe}&rr=${riskReward}&lookback=${stratParams.lookback}&ob_age=${stratParams.obAge}&atr_mult=${stratParams.atrMult}&sweep=${stratParams.sweep}&sweep_lookback=${stratParams.sweepLookback}&session=${stratParams.session}&${datasetQuery}`, { signal: controller.signal }));
       }
 
       const responses = await Promise.all(fetches);
@@ -298,35 +300,55 @@ export default function App() {
 
     const chart = createChart(chartContainerRef.current, {
       width: chartContainerRef.current.clientWidth,
-      height: 480,
-      ...CHART_THEME,
+      height: 420,
+      ...chartTheme,
     });
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#10b981',
-      downColor: '#ef4444',
+      upColor: '#FAFAFA',
+      downColor: '#404040',
       borderVisible: false,
-      wickUpColor: '#10b981',
-      wickDownColor: '#ef4444',
+      wickUpColor: '#FAFAFA',
+      wickDownColor: '#404040',
     });
 
     chartRef.current = chart;
     candleSeriesRef.current = candleSeries;
 
+    chart.subscribeCrosshairMove((param) => {
+      if (!param || !param.time || !param.seriesData) {
+        setChartReadout(null);
+        return;
+      }
+      const data = param.seriesData.get(candleSeries);
+      if (!data) {
+        setChartReadout(null);
+        return;
+      }
+      const dateStr = new Date(param.time * 1000).toISOString().slice(0, 10);
+      setChartReadout([
+        { label: 'Date', value: dateStr },
+        { label: 'O', value: data.open?.toFixed(5) ?? '—' },
+        { label: 'H', value: data.high?.toFixed(5) ?? '—' },
+        { label: 'L', value: data.low?.toFixed(5) ?? '—' },
+        { label: 'C', value: data.close?.toFixed(5) ?? '—' },
+      ]);
+    });
+
     if (equityChartRef.current) {
       const equityChart = createChart(equityChartRef.current, {
         width: equityChartRef.current.clientWidth,
-        height: 180,
-        ...CHART_THEME,
-        layout: { ...CHART_THEME.layout, fontSize: 10 },
+        height: 120,
+        ...chartTheme,
+        layout: { ...chartTheme.layout, fontSize: 9 },
       });
 
       equityChartObjRef.current = equityChart;
       equitySeriesRef.current = equityChart.addSeries(LineSeries, {
-        color: '#10b981',
-        lineWidth: 2,
+        color: '#FAFAFA',
+        lineWidth: 1,
         priceLineVisible: false,
-        lastValueVisible: true,
+        lastValueVisible: false,
       });
     }
 
@@ -366,7 +388,6 @@ export default function App() {
   const backtestTrades = backtestData?.trades ?? [];
   const backtestStats = backtestData?.stats ?? null;
   const equityCurve = useMemo(() => buildEquityCurve(backtestTrades), [backtestTrades]);
-  const monthlyReturns = useMemo(() => buildMonthlyReturns(backtestTrades), [backtestTrades]);
   const maxDrawdown = useMemo(() => {
     if (backtestStats?.max_drawdown_pct != null) {
       return -Math.abs(backtestStats.max_drawdown_pct);
@@ -392,328 +413,358 @@ export default function App() {
   const partialTpRate = backtestStats?.partial_tp_rate ?? 0;
   const selectedDatasetLabel = resolveDatasetLabel(datasets, selectedDataset);
 
-  const overviewMetrics = [
-    { label: 'Net P/L', value: `$${formatMoney(netPnl)}`, change: (netPnl / STARTING_BALANCE) * 100, isPositive: netPnl > 0, isPrimary: true },
-    { label: 'Win Rate', value: `${winRate.toFixed(1)}%`, isPositive: winRate > 50 },
-    { label: 'Profit Factor', value: profitFactor.toFixed(2), isPositive: profitFactor > 1 },
-    { label: 'Partial TP %', value: `${partialTpRate.toFixed(1)}%`, isPositive: partialTpRate > 0, neutral: partialTpRate === 0 },
-    { label: 'Max Drawdown', value: `${maxDrawdown.toFixed(1)}%`, isPositive: false },
-    { label: 'Sharpe Ratio', value: sharpeRatio.toFixed(2), isPositive: sharpeRatio > 1 },
-    { label: 'Total Trades', value: totalTrades.toString(), neutral: true },
-  ];
-
-  const containerVariants = {
-    hidden: { opacity: 0 },
-    visible: { opacity: 1, transition: { staggerChildren: 0.08, delayChildren: 0.08 } },
-  };
-
-  const itemVariants = {
-    hidden: { opacity: 0, y: 18 },
-    visible: { opacity: 1, y: 0, transition: { duration: 0.52, ease: [0.22, 1, 0.36, 1] } },
-  };
+  const containerVariants = motionVariants.container;
+  const itemVariants = motionVariants.item;
 
   const OVERLAY_ITEMS = [
-    { key: 'structure', label: 'Structure', color: '#10b981' },
-    { key: 'orderBlocks', label: 'Order Blocks', color: '#3b82f6' },
-    { key: 'fvg', label: 'FVG', color: '#a855f7' },
-    { key: 'liquidity', label: 'Liquidity', color: '#06b6d4' },
+    { key: 'structure', label: 'Structure' },
+    { key: 'orderBlocks', label: 'Order Blocks' },
+    { key: 'fvg', label: 'FVG' },
+    { key: 'liquidity', label: 'Liquidity' },
   ];
 
+  const cumulativeReturnPct = ((netPnl / STARTING_BALANCE) * 100);
+  const finalMultiple = 1 + (netPnl / STARTING_BALANCE);
+
+  const frieze = [
+    { label: 'Net P/L', numeric: netPnl, format: (v) => `$${formatMoney(v)}` },
+    { label: 'Win Rate', numeric: winRate, format: (v) => `${v.toFixed(1)}%` },
+    { label: 'Sharpe', numeric: sharpeRatio, format: (v) => v.toFixed(2) },
+    { label: 'Max DD', numeric: maxDrawdown, format: (v) => `${v.toFixed(1)}%` },
+    { label: 'Profit Factor', numeric: profitFactor, format: (v) => v.toFixed(2) },
+    { label: 'Trades', numeric: totalTrades, format: (v) => Math.round(v).toString() },
+    { label: 'Avg Win', numeric: avgWin, format: (v) => `$${formatMoney(v)}` },
+    { label: 'Avg Loss', numeric: avgLoss, format: (v) => `$${formatMoney(v)}` },
+  ];
+
+  const parameters = [
+    { label: 'Timeframe', value: `${timeframe}m` },
+    { label: 'Risk : Reward', value: `1 : ${riskReward}` },
+    { label: 'Lookback', value: `${stratParams.lookback}` },
+    { label: 'OB max age', value: `${stratParams.obAge}` },
+    { label: 'ATR mult', value: `${stratParams.atrMult}` },
+    { label: 'Session', value: stratParams.session },
+  ];
+
+  const attribution = [
+    { label: 'Winners', value: backtestStats?.winners ?? '—', positive: true },
+    { label: 'Losers', value: backtestStats?.losers ?? '—', positive: false },
+    { label: 'Largest Win', value: `$${formatMoney(largestWin)}`, positive: true },
+    { label: 'Largest Loss', value: `$${formatMoney(largestLoss)}`, positive: false },
+    { label: 'Partial TP', value: `${partialTpRate.toFixed(1)}%`, positive: true },
+  ];
+
+  const runId = useMemo(() => `R-${Math.floor(1000 + Math.random() * 9000)}`, []);
+  const nowStr = new Date().toISOString().slice(11, 16) + ' UTC';
+
+  const strategyName = useMemo(
+    () => generateStrategyName({
+      session: stratParams.session,
+      riskReward,
+      timeframe,
+      lookback: stratParams.lookback,
+      atrMult: stratParams.atrMult,
+    }),
+    [stratParams.session, stratParams.lookback, stratParams.atrMult, riskReward, timeframe]
+  );
+
+  const commands = useMemo(() => {
+    const navCmds = [
+      { id: 'nav-dashboard', group: 'Navigate', label: 'Dashboard', hint: '⌘1', action: () => setActiveTab('dashboard') },
+      { id: 'nav-strategies', group: 'Navigate', label: 'Strategies', hint: '⌘2', action: () => setActiveTab('strategies') },
+      { id: 'nav-runs', group: 'Navigate', label: 'Runs', hint: '⌘3', action: () => setActiveTab('runs') },
+      { id: 'nav-backtest', group: 'Navigate', label: 'Backtest', hint: '⌘4', action: () => setActiveTab('backtest') },
+      { id: 'nav-optimize', group: 'Navigate', label: 'Optimize', hint: '⌘5', action: () => setActiveTab('optimize') },
+      { id: 'nav-walk', group: 'Navigate', label: 'Walk-Forward', hint: '⌘6', action: () => setActiveTab('walk-forward') },
+      { id: 'nav-data', group: 'Navigate', label: 'Data', hint: '⌘7', action: () => setActiveTab('data') },
+    ];
+    const datasetCmds = datasets.map((d) => ({
+      id: `ds-${d.id}`,
+      group: 'Dataset',
+      label: d.label,
+      hint: d.id,
+      action: () => setSelectedDataset(d.id),
+    }));
+    const actionCmds = [
+      { id: 'act-run', group: 'Action', label: 'Run Backtest', hint: 'Enter', action: () => loadData() },
+      {
+        id: 'act-compare',
+        group: 'Action',
+        label: compareMode ? 'Exit Compare Mode' : 'Enter Compare Mode',
+        action: () => setCompareMode((v) => !v),
+      },
+    ];
+    return [...navCmds, ...actionCmds, ...datasetCmds];
+  }, [datasets, compareMode, setActiveTab]);
+
+  const TABS = [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'strategies', label: 'Strategies' },
+    { id: 'runs', label: 'Runs' },
+    { id: 'backtest', label: 'Backtest' },
+    { id: 'optimize', label: 'Optimize' },
+    { id: 'walk-forward', label: 'Walk-Forward' },
+    { id: 'data', label: 'Data' },
+  ];
+
+  const rawPrimary = activeTab?.startsWith('runs/') ? 'runs' : activeTab;
+  const knownIds = new Set(TABS.map((t) => t.id));
+  const primaryTabId = knownIds.has(rawPrimary) ? rawPrimary : 'dashboard';
+  const runDetailId = activeTab?.startsWith('runs/') ? activeTab.slice(5) : null;
+
   return (
-    <div className="min-h-screen bg-black text-[#fafafa]">
-      <div className="max-w-[1440px] mx-auto px-6 py-8">
+    <div className="min-h-screen bg-black text-[#FAFAFA] font-sans antialiased">
+      <SideRail activeTab={activeTab} onTabChange={setActiveTab} version="v4" />
 
-        {/* Header */}
-        <Motion.header
-          className="flex justify-between items-center gap-4 mb-8 flex-wrap"
-          variants={itemVariants}
-          initial="hidden"
-          animate={mounted ? 'visible' : 'hidden'}
-        >
-          <div className="flex items-center gap-4">
-            <img
-              src={appLogo}
-              alt="noteQuant logo"
-              className="w-10 h-10 object-contain border border-[#262626] bg-black p-1"
-            />
-            <div>
-              <div className="text-[17px] font-semibold tracking-tight">noteQuant</div>
-            </div>
-          </div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <div className="flex items-center gap-2 px-3 py-2 border border-[#262626] bg-[#0a0a0a] text-[13px] font-mono">
-              <span className="text-[#737373]">Dataset</span>
-              <span>{selectedDatasetLabel}</span>
-            </div>
-            <div className="flex items-center gap-2 px-3 py-2 border border-[#262626] bg-[#0a0a0a] text-[13px] font-mono">
-              <span className="text-[#737373]">Pair</span>
-              <span>GBP/JPY</span>
-            </div>
-            {loading && (
-              <div className="w-2 h-2 bg-[#10b981] animate-pulse" />
-            )}
-          </div>
-        </Motion.header>
-
-        {/* Tabs */}
-        <div className="flex gap-2 mb-8 border-b border-[#262626] pb-4">
-          {[
-            { id: 'dashboard', label: 'Dashboard' },
-            { id: 'forex-stats', label: 'Forex Stats' },
-            { id: 'trade-history', label: 'Trade History' },
-            { id: 'backtesting', label: 'Backtesting' },
-            { id: 'optimizer', label: 'Optimizer' },
-            { id: 'walk-forward', label: 'Walk-Forward' },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              className={`px-4 py-2 text-[13px] font-semibold font-mono border transition-colors ${
-                activeTab === tab.id
-                  ? 'bg-[#fafafa] text-black border-[#fafafa]'
-                  : 'bg-transparent text-[#737373] border-[#262626] hover:text-[#fafafa] hover:border-[#404040]'
-              }`}
-              onClick={() => setActiveTab(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Dashboard Tab */}
-        <Motion.div
-          className="space-y-6"
+      <div className="pl-16">
+        <Motion.main
           variants={containerVariants}
           initial="hidden"
           animate={mounted ? 'visible' : 'hidden'}
-          style={{ display: activeTab === 'dashboard' ? 'block' : 'none' }}
+          className="max-w-[1600px] mx-auto px-12 py-10"
         >
-          {/* Toolbar */}
-          <Motion.div variants={itemVariants} className="p-5 border border-[#262626] bg-[#0a0a0a]">
-            <div className="flex flex-wrap gap-6 items-center">
-              <div className="flex items-center gap-3">
-                <span className="text-[11px] text-[#737373] font-mono uppercase tracking-widest">Timeframe</span>
-                <div className="flex border border-[#262626]">
-                  {TIMEFRAMES.map((tf) => (
-                    <button
-                      key={tf.value}
-                      className={`px-3 py-1.5 text-[12px] font-mono transition-colors ${
-                        timeframe === tf.value
-                          ? 'bg-[#fafafa] text-black'
-                          : 'text-[#737373] hover:text-[#fafafa]'
-                      }`}
-                      onClick={() => setTimeframe(tf.value)}
-                    >
-                      {tf.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <span className="text-[11px] text-[#737373] font-mono uppercase tracking-widest">R:R</span>
-                <div className="flex border border-[#262626]">
-                  {RR_OPTIONS.map((rr) => (
-                    <button
-                      key={rr}
-                      className={`px-3 py-1.5 text-[12px] font-mono transition-colors ${
-                        riskReward === rr
-                          ? 'bg-[#fafafa] text-black'
-                          : 'text-[#737373] hover:text-[#fafafa]'
-                      }`}
-                      onClick={() => setRiskReward(rr)}
-                    >
-                      1:{rr}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3 flex-wrap">
-                <span className="text-[11px] text-[#737373] font-mono uppercase tracking-widest">Overlays</span>
-                <div className="flex flex-wrap gap-2">
-                  {OVERLAY_ITEMS.map((item) => (
-                    <button
-                      key={item.key}
-                      className={`flex items-center gap-2 px-3 py-1.5 text-[12px] font-mono border transition-colors ${
-                        indicators[item.key]
-                          ? 'border-[#404040] text-[#fafafa]'
-                          : 'border-[#262626] text-[#525252]'
-                      }`}
-                      onClick={() => toggleIndicator(item.key)}
-                    >
-                      <span
-                        className="w-1.5 h-1.5"
-                        style={{ background: indicators[item.key] ? item.color : '#525252' }}
-                      />
-                      {item.label}
-                    </button>
-                  ))}
-                  <button
-                    className={`flex items-center gap-2 px-3 py-1.5 text-[12px] font-mono border transition-colors ${
-                      showBacktest
-                        ? 'border-[#404040] text-[#fafafa]'
-                        : 'border-[#262626] text-[#525252]'
-                    }`}
-                    onClick={() => setShowBacktest((prev) => !prev)}
-                  >
-                    <span
-                      className="w-1.5 h-1.5"
-                      style={{ background: showBacktest ? '#fafafa' : '#525252' }}
-                    />
-                    Trades
-                  </button>
-                </div>
-              </div>
+          {/* Top meta row */}
+          <Motion.div variants={itemVariants} className="flex items-start justify-between gap-8 mb-10 flex-wrap">
+            <div className="flex items-center gap-4 text-[10px] uppercase tracking-[0.22em] text-[#525252]">
+              <span>Backtest</span>
+              <span className="text-[#262626]">·</span>
+              <span>{runId}</span>
+              <span className="text-[#262626]">·</span>
+              <span>{loading ? 'Running…' : `Completed ${nowStr}`}</span>
             </div>
-          </Motion.div>
 
-          {/* Candlestick Chart */}
-          <Motion.section variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
-            <div className="mb-4">
-              <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest mb-1">Market Chart</p>
-              <h2 className="text-[20px] font-semibold tracking-tight">Candles with structure and trade markers</h2>
-            </div>
-            <div ref={chartContainerRef} className="h-[480px] border border-[#1a1a1a] overflow-hidden" />
-          </Motion.section>
-
-          {/* Equity Line (lightweight-charts) */}
-          {showBacktest && (
-            <Motion.section variants={itemVariants} className="border border-[#262626] bg-[#0a0a0a] p-6">
-              <div className="mb-4">
-                <p className="text-[11px] text-[#737373] font-mono uppercase tracking-widest mb-1">Equity Curve</p>
-                <h2 className="text-[20px] font-semibold tracking-tight">Strategy balance progression</h2>
-              </div>
-              <div ref={equityChartRef} className="h-[180px] border border-[#1a1a1a] overflow-hidden" />
-            </Motion.section>
-          )}
-        </Motion.div>
-
-        {/* Stats Tab */}
-        <Motion.div
-          className="space-y-6"
-          variants={containerVariants}
-          initial="hidden"
-          animate={mounted ? 'visible' : 'hidden'}
-          style={{ display: activeTab === 'forex-stats' ? 'block' : 'none' }}
-        >
-          {/* Hero */}
-          <Motion.section variants={itemVariants} className="grid grid-cols-1 lg:grid-cols-[1.7fr_0.9fr] gap-6 p-8 border border-[#262626] bg-[#0a0a0a]">
-            <div className="flex flex-col gap-4">
-              <div className="flex gap-3 flex-wrap text-[13px] font-mono">
-              </div>
-            </div>
-            <div className="flex flex-col justify-center gap-3 p-5 border border-[#262626] bg-black">
-              <span className="text-[11px] text-[#737373] font-mono uppercase tracking-widest">Dataset</span>
+            <div className="flex items-center gap-10">
+              <TabPills
+                id="timeframe-pills"
+                options={TIMEFRAMES.map((t) => ({ label: t.label, value: t.value }))}
+                value={timeframe}
+                onChange={setTimeframe}
+              />
               <select
-                className="w-full border border-[#262626] bg-black text-[#fafafa] font-mono text-sm p-3 outline-none focus:border-[#404040] transition-colors"
+                className="bg-transparent border-b border-[#262626] text-[11px] uppercase tracking-[0.18em] text-[#737373] py-1 outline-none focus:border-[#525252] font-normal"
                 value={selectedDataset}
                 onChange={(e) => setSelectedDataset(e.target.value)}
               >
-                {datasets.map((dataset) => (
-                  <option key={dataset.id} value={dataset.id}>{dataset.label}</option>
+                {datasets.map((d) => (
+                  <option key={d.id} value={d.id}>{d.label}</option>
                 ))}
               </select>
-              <p className="text-[11px] text-[#525252] font-mono">Switch CSVs here to refresh all metrics and charts.</p>
+              <button
+                onClick={() => setCompareMode((v) => !v)}
+                className={`text-[11px] uppercase tracking-[0.18em] transition-colors pb-1 border-b ${
+                  compareMode ? 'text-[#FAFAFA] border-[#FAFAFA]' : 'text-[#525252] border-transparent hover:text-[#A3A3A3]'
+                }`}
+              >
+                Compare
+              </button>
+              <Button variant="primary" onClick={loadData}>Run Backtest</Button>
             </div>
-          </Motion.section>
-          
-          {/* Metrics Grid */}
-          <Motion.section variants={itemVariants} className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-            {overviewMetrics.map((metric) => (
-              <MetricCard
-                key={metric.label}
-                label={metric.label}
-                value={metric.value}
-                change={metric.change}
-                isPositive={metric.isPositive}
-                isPrimary={metric.isPrimary}
-                neutral={metric.neutral}
-              />
-            ))}
-          </Motion.section>
+          </Motion.div>
 
-          {/* Equity Curve (recharts) */}
-          <Motion.section variants={itemVariants}>
-            <EquityCurve data={equityCurve} startingBalance={STARTING_BALANCE} />
-          </Motion.section>
-
-          {/* Distribution + Breakdown */}
-          <Motion.div variants={itemVariants} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <TradeDistribution
-              wins={backtestStats?.winners ?? 0}
-              losses={backtestStats?.losers ?? 0}
-              avgWin={avgWin}
-              avgLoss={avgLoss}
-              largestWin={largestWin}
-              largestLoss={largestLoss}
-            />
-            <PerformanceBreakdown
-              monthlyReturns={monthlyReturns}
-              largestWin={largestWin}
-              largestLoss={largestLoss}
-              maxDrawdown={maxDrawdown}
-              sharpeRatio={sharpeRatio}
+          {/* Global tab pills (secondary) */}
+          <Motion.div variants={itemVariants} className="mb-14">
+            <TabPills
+              id="main-tabs"
+              options={TABS.map((t) => ({ label: t.label, value: t.id }))}
+              value={primaryTabId}
+              onChange={setActiveTab}
+              size="sm"
             />
           </Motion.div>
-        </Motion.div>
 
-        {/* Trade History Tab */}
-        <Motion.div
-          className="space-y-6"
-          variants={containerVariants}
-          initial="hidden"
-          animate={mounted ? 'visible' : 'hidden'}
-          style={{ display: activeTab === 'trade-history' ? 'block' : 'none' }}
-        >
-          <Motion.section variants={itemVariants}>
-            <TradeHistory trades={backtestTrades} />
-          </Motion.section>
-        </Motion.div>
+          {/* Dashboard */}
+          {primaryTabId === 'dashboard' && (
+            <div className="flex gap-16 items-start flex-wrap lg:flex-nowrap">
+              <div className="flex-1 min-w-0">
+                <Motion.div variants={itemVariants} className="mb-4">
+                  <h1 className="text-[44px] leading-[1.05] font-light tracking-[-0.02em] max-w-[720px]">
+                    {strategyName}
+                  </h1>
+                  <div className="flex gap-6 text-[12px] text-[#737373] mt-4">
+                    <span>{selectedDatasetLabel || '—'}</span>
+                    <span className="text-[#262626]">/</span>
+                    <span>{timeframe}m candles</span>
+                    <span className="text-[#262626]">/</span>
+                    <span>1:{riskReward} R:R</span>
+                    {compareMode && (
+                      <>
+                        <span className="text-[#262626]">/</span>
+                        <span className="text-[#FAFAFA]">Compare mode</span>
+                      </>
+                    )}
+                  </div>
+                </Motion.div>
 
-        {/* Backtesting Tab */}
-        {activeTab === 'backtesting' && (
-            <Motion.div
-                variants={containerVariants}
-                initial="hidden"
-                animate={mounted ? 'visible' : 'hidden'}
-            >
+                <div className="mt-12 mb-10">
+                  <HeroMetric
+                    value={`${finalMultiple.toFixed(2)}x`}
+                    caption={`${cumulativeReturnPct >= 0 ? '+' : ''}${cumulativeReturnPct.toFixed(1)}% cumulative · net of costs`}
+                  />
+                </div>
+
+                <Motion.div variants={itemVariants} className="mb-3 flex items-center justify-between gap-6">
+                  <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-2">
+                      <span className="w-6 h-px bg-[#FAFAFA]" />
+                      <Label>Strategy</Label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="w-6 h-px bg-[#404040]" />
+                      <Label>Benchmark</Label>
+                    </div>
+                  </div>
+                  <ChartReadout readout={chartReadout} />
+                </Motion.div>
+
+                <Motion.div variants={itemVariants} className="mb-2">
+                  <Sweep active={loading} />
+                </Motion.div>
+
+                <Motion.section variants={itemVariants} className={compareMode ? 'grid grid-cols-2 gap-8' : ''}>
+                  <div ref={chartContainerRef} className="h-[420px] w-full" />
+                  {compareMode && (
+                    <div className="h-[420px] w-full border-l border-[#141414] pl-8 flex items-center justify-center text-[12px] text-[#525252]">
+                      <div className="text-center">
+                        <div className="mb-3">Compare slot</div>
+                        <select
+                          value={compareDataset}
+                          onChange={(e) => setCompareDataset(e.target.value)}
+                          className="bg-transparent border-b border-[#262626] text-[11px] uppercase tracking-[0.18em] text-[#737373] py-1 outline-none focus:border-[#525252]"
+                        >
+                          <option value="">Select dataset…</option>
+                          {datasets.filter((d) => d.id !== selectedDataset).map((d) => (
+                            <option key={d.id} value={d.id}>{d.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </Motion.section>
+
+                {showBacktest && (
+                  <Motion.section variants={itemVariants} className="mt-10">
+                    <Label className="block mb-4">Drawdown</Label>
+                    <div ref={equityChartRef} className="h-[120px] w-full" />
+                  </Motion.section>
+                )}
+
+                <MetricFrieze metrics={frieze} />
+
+                <Motion.div variants={itemVariants} className="mt-10 flex flex-wrap gap-8">
+                  <div className="flex items-center gap-4">
+                    <Label>R:R</Label>
+                    <div className="flex gap-3">
+                      {RR_OPTIONS.map((rr) => (
+                        <button
+                          key={rr}
+                          onClick={() => setRiskReward(rr)}
+                          className={`text-[12px] font-mono transition-colors ${
+                            riskReward === rr ? 'text-[#FAFAFA]' : 'text-[#525252] hover:text-[#A3A3A3]'
+                          }`}
+                        >
+                          1:{rr}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-4">
+                    <Label>Overlays</Label>
+                    <div className="flex gap-4">
+                      {OVERLAY_ITEMS.map((item) => (
+                        <button
+                          key={item.key}
+                          onClick={() => toggleIndicator(item.key)}
+                          className={`text-[11px] uppercase tracking-[0.12em] transition-colors ${
+                            indicators[item.key] ? 'text-[#FAFAFA]' : 'text-[#3A3A3A] hover:text-[#737373]'
+                          }`}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                      <button
+                        onClick={() => setShowBacktest((v) => !v)}
+                        className={`text-[11px] uppercase tracking-[0.12em] transition-colors ${
+                          showBacktest ? 'text-[#FAFAFA]' : 'text-[#3A3A3A] hover:text-[#737373]'
+                        }`}
+                      >
+                        Trades
+                      </button>
+                    </div>
+                  </div>
+                </Motion.div>
+              </div>
+
+              <ContextPanel parameters={parameters} attribution={attribution} />
+            </div>
+          )}
+
+          {primaryTabId === 'strategies' && (
+            <Strategies onRunStrategy={() => setActiveTab('backtest')} />
+          )}
+
+          {primaryTabId === 'runs' && !runDetailId && (
+            <Runs onOpenRun={(id) => setActiveTab(`runs/${id}`)} />
+          )}
+
+          {primaryTabId === 'runs' && runDetailId && (
+            <RunDetail runId={runDetailId} onBack={() => setActiveTab('runs')} />
+          )}
+
+          {primaryTabId === 'data' && (
+            <Data
+              datasets={datasets}
+              selectedDataset={selectedDataset}
+              onSelect={(id) => { setSelectedDataset(id); setActiveTab('dashboard'); }}
+            />
+          )}
+
+          {primaryTabId === 'backtest' && (
+            <Motion.div variants={itemVariants}>
               <BacktestingTab
-                  datasets={datasets}
-                  selectedDataset={selectedDataset}
-                  onDatasetChange={setSelectedDataset}
-                  onBacktestComplete={handleBacktestComplete}
+                datasets={datasets}
+                selectedDataset={selectedDataset}
+                onDatasetChange={setSelectedDataset}
+                onBacktestComplete={handleBacktestComplete}
               />
             </Motion.div>
-        )}
+          )}
 
-        {activeTab === 'optimizer' && (
-          <Motion.div
-            variants={containerVariants}
-            initial="hidden"
-            animate={mounted ? 'visible' : 'hidden'}
-          >
-            <OptimizerTab
-              datasets={datasets}
-              selectedDataset={selectedDataset}
-              onDatasetChange={setSelectedDataset}
-            />
-          </Motion.div>
-        )}
+          {primaryTabId === 'optimize' && (
+            <Motion.div variants={itemVariants}>
+              <OptimizerTab
+                datasets={datasets}
+                selectedDataset={selectedDataset}
+                onDatasetChange={setSelectedDataset}
+              />
+            </Motion.div>
+          )}
 
-        {activeTab === 'walk-forward' && (
-          <Motion.div
-            variants={containerVariants}
-            initial="hidden"
-            animate={mounted ? 'visible' : 'hidden'}
-          >
-            <WalkForwardTab
-              datasets={datasets}
-              selectedDataset={selectedDataset}
-              onDatasetChange={setSelectedDataset}
-            />
-          </Motion.div>
-        )}
+          {primaryTabId === 'walk-forward' && (
+            <Motion.div variants={itemVariants}>
+              <WalkForwardTab
+                datasets={datasets}
+                selectedDataset={selectedDataset}
+                onDatasetChange={setSelectedDataset}
+              />
+            </Motion.div>
+          )}
+        </Motion.main>
       </div>
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        commands={commands}
+      />
+
+      <button
+        onClick={() => setPaletteOpen(true)}
+        className="fixed bottom-6 right-6 flex items-center gap-2 px-3 py-2 border border-[#262626] bg-black text-[10px] uppercase tracking-[0.18em] text-[#525252] hover:text-[#FAFAFA] hover:border-[#404040] transition-colors"
+      >
+        <span>⌘K</span>
+        <span>Command</span>
+      </button>
     </div>
   );
 
